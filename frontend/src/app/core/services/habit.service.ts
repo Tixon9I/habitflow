@@ -10,7 +10,6 @@ import {
   deleteDoc,
   query,
   where,
-  orderBy,
   serverTimestamp,
   Timestamp,
 } from '@angular/fire/firestore';
@@ -25,6 +24,12 @@ export class HabitService {
     const ref = collection(this.fs, 'habits');
     const q = query(ref, where('idUser', '==', userId), where('isActive', '==', true));
     return collectionData(q, { idField: 'idHabit' }) as Observable<Habit[]>;
+  }
+
+  getLogsByUser(userId: string): Observable<HabitLog[]> {
+    const ref = collection(this.fs, 'habit_logs');
+    const q = query(ref, where('idUser', '==', userId));
+    return collectionData(q, { idField: 'idLog' }) as Observable<HabitLog[]>;
   }
 
   async createHabit(habit: Omit<Habit, 'idHabit' | 'createdAt' | 'currentStreak' | 'bestStreak'>): Promise<string> {
@@ -107,11 +112,11 @@ export class HabitService {
 
   getLogsByHabit(habitId: string): Observable<HabitLog[]> {
     const ref = collection(this.fs, 'habit_logs');
-    const q = query(ref, where('idHabit', '==', habitId), orderBy('targetDate', 'desc'));
+    const q = query(ref, where('idHabit', '==', habitId));
     return collectionData(q, { idField: 'idLog' }) as Observable<HabitLog[]>;
   }
 
-  private formatDate(date: Date): string {
+  formatDate(date: Date): string {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
