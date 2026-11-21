@@ -4,11 +4,12 @@ import { RouterModule, Router, NavigationEnd } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
 import { ProfileModalComponent } from './features/profile-modal/profile-modal.component';
+import { HabitModalComponent } from './features/habit-modal/habit-modal.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, RouterModule, ProfileModalComponent],
+  imports: [CommonModule, RouterModule, ProfileModalComponent, HabitModalComponent],
   template: `
     @if (showNav()) {
       <nav class="topnav">
@@ -27,7 +28,7 @@ import { ProfileModalComponent } from './features/profile-modal/profile-modal.co
           <button class="btn btn--ghost btn--sm" (click)="onSeedDemo()" [disabled]="!auth.isLoggedIn()">
             Тестові дані (30 дн.)
           </button>
-          <button class="btn btn--primary btn--sm" (click)="onNewHabit()" [disabled]="!auth.isLoggedIn()">
+          <button class="btn btn--primary btn--sm" (click)="showHabitModal.set(true)" [disabled]="!auth.isLoggedIn()">
             + Нова звичка
           </button>
           <button class="topnav__avatar" (click)="showProfileModal.set(true)" [disabled]="!auth.isLoggedIn()" title="Профіль">
@@ -42,6 +43,10 @@ import { ProfileModalComponent } from './features/profile-modal/profile-modal.co
     @if (showProfileModal()) {
       <app-profile-modal (close)="showProfileModal.set(false)" />
     }
+
+    @if (showHabitModal()) {
+      <app-habit-modal (close)="showHabitModal.set(false)" />
+    }
   `,
   styleUrls: ['./app.component.scss'],
 })
@@ -51,6 +56,7 @@ export class AppComponent {
 
   readonly showNav = signal(true);
   readonly showProfileModal = signal(false);
+  readonly showHabitModal = signal(false);
 
   readonly avatarInitial = () => {
     const name = this.auth.currentUser()?.displayName ?? 'U';
@@ -66,6 +72,4 @@ export class AppComponent {
   }
 
   onSeedDemo(): void {}
-
-  onNewHabit(): void {}
 }
