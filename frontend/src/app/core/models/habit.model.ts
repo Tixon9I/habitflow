@@ -1,28 +1,21 @@
-// ============================================================
-// HabitFlow — TypeScript моделі (точна відповідність Firestore)
-// Розділ 2 пояснювальної записки: 4 плоскі колекції
-// ============================================================
-
 import { Timestamp } from '@angular/fire/firestore';
 
-// ── users ────────────────────────────────────────────────────
 export interface User {
   idUser: string;
   email: string;
   displayName: string;
   timezone: string;
-  notificationLimit: number;   // default 3
+  notificationLimit: number;
   aiConsent: boolean;
   createdAt: Timestamp | null;
 }
 
-// ── habits ───────────────────────────────────────────────────
 export type FrequencyType = 'daily' | 'custom';
 
 export interface ScheduleHistoryEntry {
   changedAt: Timestamp;
-  oldTime: string;    // 'HH:mm'
-  oldDays: number[];  // ISO weekday 1..7
+  oldTime: string;
+  oldDays: number[];
 }
 
 export interface Habit {
@@ -31,8 +24,8 @@ export interface Habit {
   title: string;
   category: string;
   frequencyType: FrequencyType;
-  targetDays: number[];         // ISO weekday 1..7
-  reminderTime: string;         // 'HH:mm'
+  targetDays: number[];
+  reminderTime: string;
   scheduleHistory: ScheduleHistoryEntry[];
   currentStreak: number;
   bestStreak: number;
@@ -40,42 +33,39 @@ export interface Habit {
   createdAt: Timestamp | null;
 }
 
-// ── habit_logs ───────────────────────────────────────────────
 export interface HabitLog {
   idLog: string;
   idHabit: string;
   idUser: string;
-  targetDate: string;      // 'YYYY-MM-DD'
+  targetDate: string;
   completedAt: Timestamp | null;
-  plannedTime: string;     // 'HH:mm'
-  delayMinutes: number;    // >= 0 (від'ємні прирівнюються до 0 на бекенді)
+  plannedTime: string;
+  delayMinutes: number;
 }
 
-// ── recommendations ──────────────────────────────────────────
-export type RiskLevel     = 'low' | 'medium' | 'high';
-export type MainFactor    = 'late_checkin' | 'weekend_drop' | 'low_regularity';
-export type RecStatus     = 'pending' | 'accepted' | 'dismissed';
+export type RiskLevel = 'low' | 'medium' | 'high';
+export type MainFactor = 'late_checkin' | 'weekend_drop' | 'low_regularity';
+export type RecStatus = 'pending' | 'accepted' | 'dismissed';
 
 export interface Recommendation {
   idRecommendation: string;
   idHabit: string;
   idUser: string;
-  riskScore: number;        // 0..1
+  riskScore: number;
   riskLevel: RiskLevel;
   mainFactor: MainFactor;
-  suggestedTime: string;    // 'HH:mm'
-  suggestedFrequency: number; // int, напр. 5 для Пн–Пт
-  explanationText: string;  // українською
+  suggestedTime: string;
+  suggestedFrequency: number;
+  explanationText: string;
   status: RecStatus;
   generatedAt: Timestamp | null;
 }
 
-// ── ML API DTO (для запиту до localhost:8000) ─────────────────
 export interface AnalyzeRequest {
   idUser: string;
   aiConsent: boolean;
   notificationLimit: number;
-  referenceDate: string;     // 'YYYY-MM-DD'
+  referenceDate: string;
   habits: HabitApiDto[];
   habitLogs: HabitLogApiDto[];
 }

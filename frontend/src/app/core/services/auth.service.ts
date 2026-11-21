@@ -17,7 +17,6 @@ import {
   updateDoc,
   deleteDoc,
   serverTimestamp,
-  Timestamp,
 } from '@angular/fire/firestore';
 import { User } from '../models/habit.model';
 
@@ -27,17 +26,11 @@ export class AuthService {
   private readonly fs = inject(Firestore);
   private readonly router = inject(Router);
 
-  /** Поточний Firebase Auth акаунт */
   private readonly _fbUser = signal<FbUser | null>(null);
-
-  /** Поточний профіль користувача з Firestore */
   readonly currentUser = signal<User | null>(null);
-
-  /** Обчислюваний прапорець авторизації (аналог get-властивості) */
   readonly isLoggedIn = computed(() => this._fbUser() !== null);
 
   constructor() {
-    // Слухаємо зміну сесії (аналог Event/Subscription при зміні авторизації)
     onAuthStateChanged(this.auth, async (fbUser) => {
       this._fbUser.set(fbUser);
       if (fbUser) {
@@ -48,9 +41,6 @@ export class AuthService {
     });
   }
 
-  /**
-   * Сценарій 1: Реєстрація нового користувача
-   */
   async register(email: string, pass: string, name: string, tz: string): Promise<void> {
     try {
       const cred = await createUserWithEmailAndPassword(this.auth, email, pass);
@@ -64,10 +54,9 @@ export class AuthService {
         timezone,
         notificationLimit: 3,
         aiConsent: true,
-        createdAt: null, // на сервері буде Timestamp, для локального стейту підійде null
+        createdAt: null,
       };
 
-      // Зберігаємо профіль у колекцію users з ID = UID
       await setDoc(doc(this.fs, 'users', uid), {
         ...userProfile,
         createdAt: serverTimestamp(),
@@ -80,9 +69,6 @@ export class AuthService {
     }
   }
 
-  /**
-   * Сценарій 2: Вхід
-   */
   async login(email: string, pass: string): Promise<void> {
     try {
       const cred = await signInWithEmailAndPassword(this.auth, email, pass);
@@ -93,9 +79,6 @@ export class AuthService {
     }
   }
 
-  /**
-   * Сценарій 2: Вихід
-   */
   async logout(): Promise<void> {
     try {
       await signOut(this.auth);
@@ -107,9 +90,6 @@ export class AuthService {
     }
   }
 
-  /**
-   * Сценарій 3: Оновлення налаштувань профілю
-   */
   async updateProfile(patch: Partial<User>): Promise<void> {
     const user = this.currentUser();
     if (!user) throw new Error('Користувач не авторизований');
@@ -117,29 +97,20 @@ export class AuthService {
     try {
       const userRef = doc(this.fs, 'users', user.idUser);
       await updateDoc(userRef, patch);
-
-      // Оновлюємо значення сигналу
       this.currentUser.update((prev) => (prev ? { ...prev, ...patch } : null));
     } catch (err: unknown) {
       throw new Error(this.mapFirebaseError(err));
     }
   }
 
-  /**
-   * Сценарій 3: Видалення акаунта
-   */
   async deleteAccount(): Promise<void> {
     const user = this.currentUser();
     const fbUser = this._fbUser();
     if (!user || !fbUser) throw new Error('Користувач не авторизований');
 
     try {
-      // 1. Видаляємо документ у Firestore
       await deleteDoc(doc(this.fs, 'users', user.idUser));
-
-      // 2. Видаляємо акаунт із Firebase Auth
       await deleteUser(fbUser);
-
       this.currentUser.set(null);
       this._fbUser.set(null);
       await this.router.navigate(['/auth']);
@@ -148,9 +119,6 @@ export class AuthService {
     }
   }
 
-  /**
-   * Завантаження документа користувача з Firestore
-   */
   private async loadUserProfile(uid: string): Promise<void> {
     try {
       const snap = await getDoc(doc(this.fs, 'users', uid));
@@ -158,13 +126,10 @@ export class AuthService {
         this.currentUser.set(snap.data() as User);
       }
     } catch (e) {
-      console.error('Помилка завантаження профілю:', e);
+      console.error(e);
     }
   }
 
-  /**
-   * Мапінг кодів помилок Firebase Auth на зрозумілі повідомлення
-   */
   private mapFirebaseError(err: unknown): string {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes('email-already-in-use')) {
