@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment & secrets
+.env
+.env.local
+ml-service/.env
+frontend/src/environments/environment.local.ts
+
+# Node / Angular
+node_modules/
+dist/
+frontend/dist/
+.angular/
+frontend/.angular/
+frontend/coverage/
+
+# ML model artifact (великий бінарник — не в git)
+ml-service/app/models/habit_risk_rf.joblib
+
+# Firebase local
+.firebase/
+firebase-debug.log
+
+# Misc
+*.log
+*.tmp
+npm-debug.log*
+
+# IDE (JetBrains Rider / VS Code)
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
