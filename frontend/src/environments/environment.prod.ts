@@ -1,12 +1,12 @@
 export const environment = {
   production: true,
   firebase: {
-    apiKey: 'REPLACE_WITH_FIREBASE_API_KEY',
+    apiKey: 'AIzaSyAtYscb7oapRSSGtFQZWVO52H0uxej2kfA',
     authDomain: 'habitflow-38bd7.firebaseapp.com',
     projectId: 'habitflow-38bd7',
-    storageBucket: 'habitflow-38bd7.appspot.com',
-    messagingSenderId: 'REPLACE_WITH_SENDER_ID',
-    appId: 'REPLACE_WITH_APP_ID',
+    storageBucket: 'habitflow-38bd7.firebasestorage.app',
+    messagingSenderId: '974470873197',
+    appId: '1:974470873197:web:2495128061b2fae4d2ff64',
   },
   mlServiceUrl: 'http://localhost:8000',
 };

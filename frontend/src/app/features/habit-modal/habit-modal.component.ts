@@ -13,81 +13,130 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
     <div class="modal-overlay" (click)="close.emit()">
       <div class="modal" (click)="$event.stopPropagation()">
         <div class="modal-header">
-          <h2>{{ habit() ? 'Редагувати звичку' : 'Нова звичка' }}</h2>
-          <button class="btn btn--ghost btn--sm" type="button" (click)="close.emit()">✕</button>
+          <div class="modal-header__titles">
+            <span class="eyebrow">ЗВИЧКА · НАЛАШТУВАННЯ</span>
+            <h2>{{ habit() ? 'Налаштування звички' : 'Нова звичка' }}</h2>
+          </div>
+          <button
+            class="icon-close-btn"
+            type="button"
+            (click)="close.emit()"
+            aria-label="Закрити"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
         </div>
 
         @if (errorMsg()) {
-          <div class="error-msg" style="margin-bottom: 1rem;">{{ errorMsg() }}</div>
+          <div class="error-banner">{{ errorMsg() }}</div>
         }
 
         <form [formGroup]="form" (ngSubmit)="save()">
           <div class="form-group">
-            <label for="title">Назва звички</label>
-            <input id="title" class="form-control" type="text" formControlName="title" placeholder="напр. Ранкова руханка" />
+            <label for="title">Назва</label>
+            <input
+              id="title"
+              class="form-control"
+              type="text"
+              formControlName="title"
+              placeholder="Читання фахової літератури"
+            />
           </div>
 
           <div class="form-group">
             <label for="category">Категорія</label>
             <select id="category" class="form-control" formControlName="category">
+              <option value="Навчання">Навчання</option>
               <option value="Здоров'я">Здоров'я</option>
               <option value="Спорт">Спорт</option>
-              <option value="Навчання">Навчання</option>
               <option value="Продуктивність">Продуктивність</option>
               <option value="Інше">Інше</option>
             </select>
           </div>
 
           <div class="form-group">
-            <label>Частота виконання</label>
-            <div style="display: flex; gap: 1rem; margin-top: 0.25rem;">
-              <label style="display: flex; align-items: center; gap: 0.35rem; cursor: pointer; text-transform: none;">
-                <input type="radio" value="daily" formControlName="frequencyType" (change)="onFrequencyChange('daily')" />
+            <label>Періодичність</label>
+            <div class="segmented">
+              <button
+                type="button"
+                class="segmented__btn"
+                [class.active]="form.get('frequencyType')?.value === 'daily'"
+                (click)="setFrequency('daily')"
+              >
                 Щодня
-              </label>
-              <label style="display: flex; align-items: center; gap: 0.35rem; cursor: pointer; text-transform: none;">
-                <input type="radio" value="custom" formControlName="frequencyType" (change)="onFrequencyChange('custom')" />
-                Обрані дні
-              </label>
+              </button>
+              <button
+                type="button"
+                class="segmented__btn"
+                [class.active]="form.get('frequencyType')?.value === 'custom'"
+                (click)="setFrequency('custom')"
+              >
+                Вибрані дні
+              </button>
             </div>
           </div>
 
           @if (form.get('frequencyType')?.value === 'custom') {
-            <div class="form-group">
-              <label>Дні тижня</label>
-              <div style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.3rem;">
-                @for (d of weekdays; track d.day) {
-                  <button
-                    type="button"
-                    class="btn btn--sm"
-                    [class.btn--primary]="isDaySelected(d.day)"
-                    [class.btn--ghost]="!isDaySelected(d.day)"
-                    (click)="toggleDay(d.day)"
-                  >
-                    {{ d.label }}
-                  </button>
-                }
-              </div>
+            <div class="days-row">
+              @for (d of weekdays; track d.day) {
+                <button
+                  type="button"
+                  class="day-chip"
+                  [class.day-chip--active]="isDaySelected(d.day)"
+                  (click)="toggleDay(d.day)"
+                >
+                  {{ d.label }}
+                </button>
+              }
             </div>
           }
 
           <div class="form-group">
-            <label for="reminderTime">Час нагадування (HH:mm)</label>
-            <input id="reminderTime" class="form-control" type="time" formControlName="reminderTime" />
+            <label for="reminderTime">Час нагадування</label>
+            <input
+              id="reminderTime"
+              class="form-control mono"
+              type="time"
+              formControlName="reminderTime"
+            />
           </div>
 
-          <div class="modal-footer" style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              @if (habit()) {
-                <button type="button" class="btn btn--danger btn--sm" (click)="onDelete()" [disabled]="loading()">
+          <hr class="modal-divider" />
+
+          <div class="modal-footer">
+            @if (habit()) {
+              <div class="modal-footer__danger">
+                <button
+                  type="button"
+                  class="btn btn--ghost btn--sm"
+                  (click)="onArchive()"
+                  [disabled]="loading()"
+                >
+                  Архівувати
+                </button>
+                <button
+                  type="button"
+                  class="btn btn--danger-ghost btn--sm"
+                  (click)="onDelete()"
+                  [disabled]="loading()"
+                >
                   Видалити
                 </button>
-              }
-            </div>
+              </div>
+            }
 
-            <div style="display: flex; gap: 0.5rem;">
-              <button type="button" class="btn btn--ghost btn--sm" (click)="close.emit()">Скасувати</button>
-              <button type="submit" class="btn btn--primary btn--sm" [disabled]="loading() || form.invalid">
+            <div class="modal-footer__right">
+              <button type="button" class="btn btn--secondary" (click)="close.emit()">
+                Скасувати
+              </button>
+              <button
+                type="submit"
+                class="btn btn--primary"
+                [disabled]="loading() || form.invalid"
+              >
                 {{ loading() ? 'Збереження...' : 'Зберегти' }}
               </button>
             </div>
@@ -96,6 +145,45 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
       </div>
     </div>
   `,
+  styles: [`
+    .days-row {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .day-chip {
+      height: 44px;
+      border-radius: 9px;
+      border: 1px solid var(--border);
+      background: var(--surface-subtle);
+      color: var(--ink-muted);
+      font-family: var(--font-sans);
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+
+      &:hover:not(.day-chip--active) {
+        border-color: #D4D4D0;
+        color: var(--ink);
+      }
+
+      &--active {
+        background: var(--ink);
+        border-color: var(--ink);
+        color: #FFFFFF;
+        font-weight: 600;
+      }
+    }
+
+    .modal-footer__danger {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+  `],
 })
 export class HabitModalComponent implements OnInit {
   private readonly habitService = inject(HabitService);
@@ -121,9 +209,9 @@ export class HabitModalComponent implements OnInit {
 
   readonly form = this.fb.nonNullable.group({
     title: ['', [Validators.required, Validators.minLength(2)]],
-    category: ["Здоров'я", [Validators.required]],
+    category: ['Навчання', [Validators.required]],
     frequencyType: ['daily' as FrequencyType, [Validators.required]],
-    reminderTime: ['08:00', [Validators.required, Validators.pattern(/^([01]\d|2[0-3]):[0-5]\d$/)]],
+    reminderTime: ['20:00', [Validators.required, Validators.pattern(/^([01]\d|2[0-3]):[0-5]\d$/)]],
   });
 
   ngOnInit(): void {
@@ -139,9 +227,12 @@ export class HabitModalComponent implements OnInit {
     }
   }
 
-  onFrequencyChange(type: FrequencyType): void {
+  setFrequency(type: FrequencyType): void {
+    this.form.controls.frequencyType.setValue(type);
     if (type === 'daily') {
       this.selectedDays.set([1, 2, 3, 4, 5, 6, 7]);
+    } else if (this.selectedDays().length === 7) {
+      this.selectedDays.set([1, 2, 3, 4, 5]);
     }
   }
 
@@ -156,7 +247,7 @@ export class HabitModalComponent implements OnInit {
         this.selectedDays.set(current.filter((d) => d !== day));
       }
     } else {
-      this.selectedDays.set([...current, day].sort());
+      this.selectedDays.set([...current, day].sort((a, b) => a - b));
     }
   }
 
@@ -174,7 +265,10 @@ export class HabitModalComponent implements OnInit {
     try {
       const existing = this.habit();
       if (existing) {
-        if (existing.reminderTime !== formVal.reminderTime || JSON.stringify(existing.targetDays) !== JSON.stringify(days)) {
+        if (
+          existing.reminderTime !== formVal.reminderTime ||
+          JSON.stringify(existing.targetDays) !== JSON.stringify(days)
+        ) {
           await this.habitService.updateHabitSchedule(existing, formVal.reminderTime, days);
         }
       } else {
@@ -197,11 +291,26 @@ export class HabitModalComponent implements OnInit {
     }
   }
 
+  async onArchive(): Promise<void> {
+    const existing = this.habit();
+    if (!existing) return;
+
+    this.loading.set(true);
+    try {
+      await this.habitService.archiveHabit(existing.idHabit);
+      this.close.emit();
+    } catch (e: unknown) {
+      this.errorMsg.set(e instanceof Error ? e.message : 'Помилка архівації');
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
   async onDelete(): Promise<void> {
     const existing = this.habit();
     if (!existing) return;
 
-    const confirmed = window.confirm(`Видалити звичку "${existing.title}"?`);
+    const confirmed = window.confirm(`Видалити звичку «${existing.title}»?`);
     if (!confirmed) return;
 
     this.loading.set(true);

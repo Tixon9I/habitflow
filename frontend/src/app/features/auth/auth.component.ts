@@ -1,7 +1,6 @@
-import { Component, signal, computed } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators, AbstractControl } from '@angular/forms';
-import { inject } from '@angular/core';
 import { AuthService } from '../../core/services/auth.service';
 
 type AuthMode = 'login' | 'register';
@@ -13,80 +12,108 @@ type AuthMode = 'login' | 'register';
   template: `
     <div class="auth-wrap">
       <div class="auth-card card">
-        <!-- Logo -->
-        <div class="auth-logo">
-          <span class="logo-mark">HF</span>
+        <div class="auth-brand">
+          <span class="logo-mark" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+          </span>
           <span class="logo-text">HabitFlow</span>
         </div>
 
-        <h2 class="auth-title">
-          {{ mode() === 'register' ? 'Створити акаунт' : 'Увійти' }}
-        </h2>
+        <div class="auth-header">
+          <span class="eyebrow">{{ mode() === 'register' ? 'ОБЛІКОВИЙ ЗАПИС · РЕЄСТРАЦІЯ' : 'ОБЛІКОВИЙ ЗАПИС · ВХІД' }}</span>
+          <h2 class="auth-title">
+            {{ mode() === 'register' ? 'Створити акаунт' : 'Увійти в HabitFlow' }}
+          </h2>
+        </div>
 
-        <!-- Error banner -->
+        <div class="segmented auth-switcher">
+          <button
+            type="button"
+            class="segmented__btn"
+            [class.active]="mode() === 'login'"
+            (click)="setMode('login')"
+          >
+            Вхід
+          </button>
+          <button
+            type="button"
+            class="segmented__btn"
+            [class.active]="mode() === 'register'"
+            (click)="setMode('register')"
+          >
+            Реєстрація
+          </button>
+        </div>
+
         @if (errorMsg()) {
-          <div class="auth-error">{{ errorMsg() }}</div>
+          <div class="error-banner">{{ errorMsg() }}</div>
         }
 
         <form [formGroup]="form" (ngSubmit)="submit()">
-          <!-- Name (register only) -->
           @if (mode() === 'register') {
             <div class="form-group">
               <label for="displayName">Ім'я</label>
-              <input id="displayName" class="form-control"
-                     type="text" formControlName="displayName"
-                     placeholder="Ваше ім'я" autocomplete="name">
+              <input
+                id="displayName"
+                class="form-control"
+                type="text"
+                formControlName="displayName"
+                placeholder="Ваше ім'я"
+                autocomplete="name"
+              />
               @if (showErr('displayName')) {
                 <span class="error-msg">Введіть ім'я (мін. 2 символи)</span>
               }
             </div>
           }
 
-          <!-- Email -->
           <div class="form-group">
             <label for="email">Email</label>
-            <input id="email" class="form-control"
-                   type="email" formControlName="email"
-                   placeholder="you@example.com" autocomplete="email">
+            <input
+              id="email"
+              class="form-control"
+              type="email"
+              formControlName="email"
+              placeholder="you@example.com"
+              autocomplete="email"
+            />
             @if (showErr('email')) {
               <span class="error-msg">Введіть коректний email</span>
             }
           </div>
 
-          <!-- Password -->
           <div class="form-group">
             <label for="password">Пароль</label>
-            <input id="password" class="form-control"
-                   type="password" formControlName="password"
-                   placeholder="Мін. 6 символів" autocomplete="current-password">
+            <input
+              id="password"
+              class="form-control"
+              type="password"
+              formControlName="password"
+              placeholder="Мінімум 6 символів"
+              autocomplete="current-password"
+            />
             @if (showErr('password')) {
               <span class="error-msg">Мінімум 6 символів</span>
             }
           </div>
 
-          <!-- AI Consent (register only) -->
           @if (mode() === 'register') {
-            <div class="form-group consent-group">
-              <label class="checkbox-label">
-                <input type="checkbox" formControlName="aiConsent">
-                <span>Я погоджуюсь на обробку даних ШІ для персональних рекомендацій</span>
-              </label>
-            </div>
+            <label class="auth-consent">
+              <input type="checkbox" formControlName="aiConsent" />
+              <span>Погоджуюсь на обробку історії звичок ШІ для персональних рекомендацій розкладу</span>
+            </label>
           }
 
-          <button type="submit"
-                  class="btn btn--primary btn--lg auth-submit"
-                  [disabled]="loading()">
-            {{ loading() ? 'Завантаження…' : (mode() === 'register' ? 'Зареєструватись' : 'Увійти') }}
+          <button
+            type="submit"
+            class="btn btn--primary btn--lg auth-submit"
+            [disabled]="loading()"
+          >
+            {{ loading() ? 'Завантаження...' : (mode() === 'register' ? 'Зареєструватися' : 'Увійти') }}
           </button>
         </form>
-
-        <p class="auth-toggle">
-          {{ mode() === 'login' ? 'Немає акаунта?' : 'Вже є акаунт?' }}
-          <button class="link-btn" type="button" (click)="toggleMode()">
-            {{ mode() === 'login' ? 'Зареєструватись' : 'Увійти' }}
-          </button>
-        </p>
       </div>
     </div>
   `,
@@ -94,23 +121,24 @@ type AuthMode = 'login' | 'register';
 })
 export class AuthComponent {
   private readonly authSvc = inject(AuthService);
-  private readonly fb      = inject(FormBuilder);
+  private readonly fb = inject(FormBuilder);
 
-  readonly mode    = signal<AuthMode>('login');
+  readonly mode = signal<AuthMode>('login');
   readonly loading = signal(false);
   readonly errorMsg = signal('');
 
   readonly form = this.fb.nonNullable.group({
     displayName: ['', [Validators.minLength(2)]],
-    email:       ['', [Validators.required, Validators.email]],
-    password:    ['', [Validators.required, Validators.minLength(6)]],
-    aiConsent:   [false],
+    email: ['', [Validators.required, Validators.email]],
+    password: ['', [Validators.required, Validators.minLength(6)]],
+    aiConsent: [true],
   });
 
-  toggleMode(): void {
-    this.mode.update(m => m === 'login' ? 'register' : 'login');
+  setMode(target: AuthMode): void {
+    if (this.mode() === target) return;
+    this.mode.set(target);
     this.errorMsg.set('');
-    this.form.reset();
+    this.form.reset({ displayName: '', email: '', password: '', aiConsent: true });
   }
 
   showErr(field: string): boolean {
@@ -123,9 +151,10 @@ export class AuthComponent {
       this.form.markAllAsTouched();
       return;
     }
+
     this.loading.set(true);
     this.errorMsg.set('');
-    const { email, password, displayName, aiConsent } = this.form.getRawValue();
+    const { email, password, displayName } = this.form.getRawValue();
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
     try {
