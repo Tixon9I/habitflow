@@ -3,11 +3,12 @@ import { CommonModule } from '@angular/common';
 import { RouterModule, Router, NavigationEnd } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
+import { ProfileModalComponent } from './features/profile-modal/profile-modal.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, RouterModule],
+  imports: [CommonModule, RouterModule, ProfileModalComponent],
   template: `
     @if (showNav()) {
       <nav class="topnav">
@@ -29,7 +30,7 @@ import { AuthService } from './core/services/auth.service';
           <button class="btn btn--primary btn--sm" (click)="onNewHabit()" [disabled]="!auth.isLoggedIn()">
             + Нова звичка
           </button>
-          <button class="topnav__avatar" (click)="onProfile()" [disabled]="!auth.isLoggedIn()" title="Профіль">
+          <button class="topnav__avatar" (click)="showProfileModal.set(true)" [disabled]="!auth.isLoggedIn()" title="Профіль">
             {{ avatarInitial() }}
           </button>
         </div>
@@ -37,6 +38,10 @@ import { AuthService } from './core/services/auth.service';
     }
 
     <router-outlet />
+
+    @if (showProfileModal()) {
+      <app-profile-modal (close)="showProfileModal.set(false)" />
+    }
   `,
   styleUrls: ['./app.component.scss'],
 })
@@ -45,6 +50,7 @@ export class AppComponent {
   private readonly router = inject(Router);
 
   readonly showNav = signal(true);
+  readonly showProfileModal = signal(false);
 
   readonly avatarInitial = () => {
     const name = this.auth.currentUser()?.displayName ?? 'U';
@@ -62,6 +68,4 @@ export class AppComponent {
   onSeedDemo(): void {}
 
   onNewHabit(): void {}
-
-  onProfile(): void {}
 }
