@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { RouterModule, Router, NavigationEnd } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
+import { HabitService } from './core/services/habit.service';
 import { ProfileModalComponent } from './features/profile-modal/profile-modal.component';
 import { HabitModalComponent } from './features/habit-modal/habit-modal.component';
 
@@ -34,9 +35,13 @@ import { HabitModalComponent } from './features/habit-modal/habit-modal.componen
               type="button"
               class="topnav__demo-btn"
               (click)="onSeedDemo()"
-              [disabled]="!auth.isLoggedIn()"
+              [disabled]="!auth.isLoggedIn() || seeding()"
             >
-              Тестові дані <span class="topnav__demo-muted">(30 дн.)</span>
+              @if (seeding()) {
+                Генерація...
+              } @else {
+                Тестові дані <span class="topnav__demo-muted">(30 дн.)</span>
+              }
             </button>
 
             <button
@@ -81,11 +86,13 @@ import { HabitModalComponent } from './features/habit-modal/habit-modal.componen
 })
 export class AppComponent {
   readonly auth = inject(AuthService);
+  private readonly habitService = inject(HabitService);
   private readonly router = inject(Router);
 
   readonly showNav = signal(true);
   readonly showProfileModal = signal(false);
   readonly showHabitModal = signal(false);
+  readonly seeding = signal(false);
 
   readonly avatarInitial = () => {
     const name = this.auth.currentUser()?.displayName ?? 'U';
@@ -100,5 +107,20 @@ export class AppComponent {
       });
   }
 
-  onSeedDemo(): void {}
+  async onSeedDemo(): Promise<void> {
+    const user = this.auth.currentUser();
+    if (!user || this.seeding()) return;
+
+    const confirmed = window.confirm(
+      'Додати 5 тестових звичок та історію відміток за останні 30 днів?'
+    );
+    if (!confirmed) return;
+
+    this.seeding.set(true);
+    try {
+      await this.habitService.seedDemoHistory(user.idUser);
+    } finally {
+      this.seeding.set(false);
+    }
+  }
 }

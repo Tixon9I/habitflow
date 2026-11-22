@@ -8,6 +8,7 @@ import {
   getDocs,
   updateDoc,
   deleteDoc,
+  writeBatch,
   query,
   where,
   serverTimestamp,
@@ -15,6 +16,15 @@ import {
 } from '@angular/fire/firestore';
 import { Observable } from 'rxjs';
 import { Habit, HabitLog, ScheduleHistoryEntry } from '../models/habit.model';
+
+interface DemoHabitTemplate {
+  title: string;
+  category: string;
+  reminderTime: string;
+  currentStreak: number;
+  bestStreak: number;
+  pattern: 'stable' | 'late_checkin' | 'weekend_drop' | 'moderate';
+}
 
 @Injectable({ providedIn: 'root' })
 export class HabitService {
@@ -32,7 +42,9 @@ export class HabitService {
     return collectionData(q, { idField: 'idLog' }) as Observable<HabitLog[]>;
   }
 
-  async createHabit(habit: Omit<Habit, 'idHabit' | 'createdAt' | 'currentStreak' | 'bestStreak'>): Promise<string> {
+  async createHabit(
+    habit: Omit<Habit, 'idHabit' | 'createdAt' | 'currentStreak' | 'bestStreak'>
+  ): Promise<string> {
     const ref = collection(this.fs, 'habits');
     const payload = {
       ...habit,
@@ -116,11 +128,142 @@ export class HabitService {
     return collectionData(q, { idField: 'idLog' }) as Observable<HabitLog[]>;
   }
 
+  async seedDemoHistory(userId: string): Promise<void> {
+    const templates: DemoHabitTemplate[] = [
+      {
+        title: 'Читання фахової літератури',
+        category: 'Навчання',
+        reminderTime: '20:00',
+        currentStreak: 12,
+        bestStreak: 16,
+        pattern: 'stable',
+      },
+      {
+        title: 'Ранкова пробіжка',
+        category: 'Спорт',
+        reminderTime: '07:30',
+        currentStreak: 4,
+        bestStreak: 9,
+        pattern: 'late_checkin',
+      },
+      {
+        title: 'Практика англійської',
+        category: 'Навчання',
+        reminderTime: '19:00',
+        currentStreak: 5,
+        bestStreak: 10,
+        pattern: 'weekend_drop',
+      },
+      {
+        title: 'Алгоритмічні задачі',
+        category: 'Навчання',
+        reminderTime: '18:30',
+        currentStreak: 6,
+        bestStreak: 11,
+        pattern: 'moderate',
+      },
+      {
+        title: 'Вітаміни',
+        category: "Здоров'я",
+        reminderTime: '09:00',
+        currentStreak: 21,
+        bestStreak: 21,
+        pattern: 'stable',
+      },
+    ];
+
+    const batch = writeBatch(this.fs);
+    const today = new Date();
+    const createdDate = new Date(today);
+    createdDate.setDate(today.getDate() - 30);
+    const createdTimestamp = Timestamp.fromDate(createdDate);
+
+    for (let hIdx = 0; hIdx < templates.length; hIdx++) {
+      const tpl = templates[hIdx];
+      const habitRef = doc(collection(this.fs, 'habits'));
+
+      batch.set(habitRef, {
+        idUser: userId,
+        title: tpl.title,
+        category: tpl.category,
+        frequencyType: 'daily',
+        targetDays: [1, 2, 3, 4, 5, 6, 7],
+        reminderTime: tpl.reminderTime,
+        scheduleHistory: [],
+        currentStreak: tpl.currentStreak,
+        bestStreak: tpl.bestStreak,
+        isActive: true,
+        createdAt: createdTimestamp,
+      });
+
+      const [plannedH, plannedM] = tpl.reminderTime.split(':').map(Number);
+
+      for (let offset = 1; offset <= 30; offset++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() - offset);
+        const isoDay = d.getDay() === 0 ? 7 : d.getDay();
+        const isWeekend = isoDay === 6 || isoDay === 7;
+        const seed = (hIdx * 31 + offset * 17) % 100;
+
+        if (!this.shouldSeedDay(tpl.pattern, isWeekend, seed, offset)) {
+          continue;
+        }
+
+        const delayMinutes = this.computeDemoDelay(tpl.pattern, seed);
+        const completedDate = new Date(d);
+        const totalMins = Math.min(23 * 60 + 45, plannedH * 60 + plannedM + delayMinutes);
+        completedDate.setHours(Math.floor(totalMins / 60), totalMins % 60, 0, 0);
+
+        const logRef = doc(collection(this.fs, 'habit_logs'));
+        batch.set(logRef, {
+          idHabit: habitRef.id,
+          idUser: userId,
+          targetDate: this.formatDate(d),
+          completedAt: Timestamp.fromDate(completedDate),
+          plannedTime: tpl.reminderTime,
+          delayMinutes,
+        });
+      }
+    }
+
+    await batch.commit();
+  }
+
   formatDate(date: Date): string {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+  }
+
+  private shouldSeedDay(
+    pattern: DemoHabitTemplate['pattern'],
+    isWeekend: boolean,
+    seed: number,
+    offset: number
+  ): boolean {
+    if (pattern === 'stable') {
+      return seed >= 8;
+    }
+    if (pattern === 'late_checkin') {
+      if (offset <= 7) return seed >= 35;
+      return seed >= 28;
+    }
+    if (pattern === 'weekend_drop') {
+      if (isWeekend) return seed >= 88;
+      return seed >= 12;
+    }
+    return seed >= 22;
+  }
+
+  private computeDemoDelay(pattern: DemoHabitTemplate['pattern'], seed: number): number {
+    if (pattern === 'late_checkin') {
+      return 60 + (seed % 75);
+    }
+    if (pattern === 'moderate') {
+      return 5 + (seed % 25);
+    }
+    return seed % 12;
   }
 
   private calculateDelayMinutes(actualDate: Date, plannedTimeStr: string): number {
