@@ -79,11 +79,9 @@ def predictor() -> HabitRiskPredictorService:
 
 
 def test_mr1_2_miss_rate_monotonicity(predictor: HabitRiskPredictorService) -> None:
-    """MR1.2: Збільшення кількості пропусків за останні 14 днів не має зменшувати riskScore."""
     habit = _make_habit()
     source_logs = _make_logs(delay_minutes=5.0)
 
-    # Drop 6 recent days inside the last 14 days
     dropped_dates = {REF_DATE - timedelta(days=d) for d in (0, 1, 3, 5, 8, 10)}
     followup_logs = _make_logs(skip_dates=dropped_dates, delay_minutes=5.0)
 
@@ -114,7 +112,6 @@ def test_mr1_2_miss_rate_monotonicity(predictor: HabitRiskPredictorService) -> N
 
 
 def test_mr2_1_checkin_delay_monotonicity(predictor: HabitRiskPredictorService) -> None:
-    """MR2.1: Систематичне збільшення delayMinutes підвищує ризик і зміщує suggestedTime."""
     habit = _make_habit(reminder_time="08:00")
     source_logs = _make_logs(delay_minutes=0.0, planned_time="08:00")
     followup_logs = _make_logs(delay_minutes=75.0, planned_time="08:00")
@@ -147,11 +144,9 @@ def test_mr2_1_checkin_delay_monotonicity(predictor: HabitRiskPredictorService) 
 
 
 def test_mr3_2_weekend_drop_sensitivity(predictor: HabitRiskPredictorService) -> None:
-    """MR3.2: Пропуски у суботу та неділю підвищують ризик та активують фактор weekend_drop."""
     habit = _make_habit()
     source_logs = _make_logs(delay_minutes=5.0)
 
-    # Remove all Saturday (6) and Sunday (7) check-ins in the 30-day window
     weekend_dates = {
         REF_DATE - timedelta(days=d)
         for d in range(30)
@@ -183,11 +178,10 @@ def test_mr3_2_weekend_drop_sensitivity(predictor: HabitRiskPredictorService) ->
 
     assert followup_rec.riskScore >= source_rec.riskScore
     assert followup_rec.mainFactor == "weekend_drop"
-    assert followup_rec.suggestedFrequency == 5  # Spec 4.3: weekend_drop -> 5 days/week (int)
+    assert followup_rec.suggestedFrequency == 5
 
 
 def test_mr4_2_log_permutation_invariance(predictor: HabitRiskPredictorService) -> None:
-    """MR4.2: Перестановка порядку записів habit_logs не впливає на ознаки та прогноз."""
     habit = _make_habit()
     skip_dates = {REF_DATE - timedelta(days=d) for d in (2, 6, 11, 18)}
     source_logs = _make_logs(skip_dates=skip_dates, delay_minutes=32.0)
@@ -235,7 +229,6 @@ def test_mr4_2_log_permutation_invariance(predictor: HabitRiskPredictorService) 
 def test_mr5_2_llm_failure_and_timeout_fallback(
     predictor: HabitRiskPredictorService,
 ) -> None:
-    """MR5.2: Збій або перевищення таймауту Gemini API не змінює ML-прогноз і активує шаблонний fallback."""
     habit = _make_habit()
     skip_dates = {REF_DATE - timedelta(days=d) for d in (1, 4, 9)}
     logs = _make_logs(skip_dates=skip_dates, delay_minutes=45.0)
@@ -250,7 +243,6 @@ def test_mr5_2_llm_failure_and_timeout_fallback(
         )
     )
 
-    # Simulate slow Gemini API exceeding timeout (0.2s timeout vs 0.6s sleep)
     slow_ai = AiExplanationService(api_key="", timeout_seconds=0.2)
     slow_ai._client = object()  # type: ignore[assignment]
 

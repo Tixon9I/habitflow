@@ -74,7 +74,6 @@ class FeatureExtractor:
             return pd.DataFrame(columns=["targetDate", "delayMinutes"])
 
         df = pd.DataFrame(rows)
-        # Deduplicate by targetDate deterministically (order-independent for MR4.2)
         df = (
             df.groupby("targetDate", as_index=False)["delayMinutes"]
             .mean()
@@ -136,7 +135,6 @@ class FeatureExtractor:
             return 0.0
 
         mean_delay = float(window_df["delayMinutes"].mean())
-        # Spec 4.3: negative delayMinutes (early check-ins) are clamped to 0
         return round(max(0.0, mean_delay), 2)
 
     def calcWeekendMissRate(

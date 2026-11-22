@@ -39,7 +39,6 @@ class RiskClassifierModel:
         """Generates calibrated synthetic behavioral dataset aligned with ITMAS-2026 weights."""
         rng = np.random.default_rng(random_state)
 
-        # Base behavioral instability latent factor + independent variations
         base_miss = rng.beta(1.6, 2.2, size=n_samples)
         miss_rate_14d = np.clip(base_miss + rng.normal(0.0, 0.08, size=n_samples), 0.0, 1.0)
         miss_rate_7d = np.clip(miss_rate_14d + rng.normal(0.0, 0.12, size=n_samples), 0.0, 1.0)
@@ -60,7 +59,6 @@ class RiskClassifierModel:
             30.0,
         )
 
-        # Latent risk score with weights aligned to [0.42, 0.31, 0.18, 0.09]
         regularity_component = 0.60 * miss_rate_7d + 0.40 * miss_rate_14d
         delay_component = np.clip(mean_delay, 0.0, 120.0) / 120.0
         weekend_component = weekend_miss
@@ -96,7 +94,6 @@ class RiskClassifierModel:
                     self.metrics = bundle.get("metrics", {})
                     return self.model
             except Exception:
-                # Re-train cleanly if artifact is corrupted or incompatible
                 pass
 
         X, y = self._generate_synthetic_dataset(n_samples=2400, random_state=42)
@@ -141,7 +138,6 @@ class RiskClassifierModel:
             self.artifact_path.parent.mkdir(parents=True, exist_ok=True)
             joblib.dump({"model": self.model, "metrics": self.metrics}, self.artifact_path)
         except OSError:
-            # Non-fatal if filesystem is read-only
             pass
 
         return self.model
@@ -166,11 +162,8 @@ class RiskClassifierModel:
 
     @staticmethod
     def identifyMainFactor(features: FeatureVectorDto) -> MainFactor:
-        """Identifies dominant behavioral risk factor (Section 4.3 exact thresholds)."""
-        # late_checkin: meanDelayMinutes >= 30 (spec 4.3)
         if features.meanDelayMinutes >= 30.0:
             return "late_checkin"
-        # weekend_drop: weekendMissRate - missRate14d >= 0.25 (spec 4.3)
         if (features.weekendMissRate - features.missRate14d) >= 0.25:
             return "weekend_drop"
         return "low_regularity"
@@ -181,7 +174,6 @@ class RiskClassifierModel:
         features: FeatureVectorDto,
         main_factor: MainFactor,
     ) -> str:
-        """Suggests adapted HH:mm reminder time based on observed check-in delay."""
         hours_str, minutes_str = reminder_time.split(":")
         base_minutes = int(hours_str) * 60 + int(minutes_str)
 
@@ -193,7 +185,6 @@ class RiskClassifierModel:
             rounded_early = int(round(abs(features.meanDelayMinutes) / 15.0) * 15)
             shift = -max(15, min(60, rounded_early))
 
-        # Keep reminder within sensible waking hours (06:00 .. 23:00)
         adapted_minutes = max(6 * 60, min(23 * 60, base_minutes + shift))
         new_hours, new_mins = divmod(adapted_minutes, 60)
         return f"{new_hours:02d}:{new_mins:02d}"
@@ -204,8 +195,6 @@ class RiskClassifierModel:
         features: FeatureVectorDto,
         main_factor: MainFactor,
     ) -> int:
-        """Returns suggested weekly frequency as int (Section 4.3: weekend_drop|low_regularity -> 5)."""
         if main_factor in ("weekend_drop", "low_regularity"):
-            return 5  # Mon–Fri per spec
-        # late_checkin: keep current schedule, return current day count
+            return 5
         return len(habit.targetDays)

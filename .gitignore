@@ -23,7 +23,7 @@ frontend/dist/
 frontend/.angular/
 frontend/coverage/
 
-# ML model artifact (великий бінарник — не в git)
+# ML model artifact
 ml-service/app/models/habit_risk_rf.joblib
 
 # Firebase local
