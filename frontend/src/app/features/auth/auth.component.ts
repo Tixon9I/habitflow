@@ -51,6 +51,10 @@ type AuthMode = 'login' | 'register';
           <div class="error-banner">{{ errorMsg() }}</div>
         }
 
+        @if (successMsg()) {
+          <div class="success-banner">{{ successMsg() }}</div>
+        }
+
         <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
           @if (mode() === 'register') {
             <div class="form-group">
@@ -70,7 +74,7 @@ type AuthMode = 'login' | 'register';
           }
 
           <div class="form-group">
-            <label for="email">Email</label>
+            <label for="email">Електронна пошта</label>
             <input
               id="email"
               class="form-control"
@@ -85,7 +89,19 @@ type AuthMode = 'login' | 'register';
           </div>
 
           <div class="form-group">
-            <label for="password">Пароль</label>
+            <div class="password-label-row">
+              <label for="password">Пароль</label>
+              @if (mode() === 'login') {
+                <button
+                  type="button"
+                  class="forgot-link"
+                  [disabled]="loading()"
+                  (click)="onForgotPassword()"
+                >
+                  Забули пароль?
+                </button>
+              }
+            </div>
             <input
               id="password"
               class="form-control"
@@ -102,10 +118,15 @@ type AuthMode = 'login' | 'register';
           </div>
 
           @if (mode() === 'register') {
-            <label class="auth-consent">
-              <input type="checkbox" formControlName="aiConsent" />
-              <span>Погоджуюсь на обробку історії звичок ШІ для персональних рекомендацій розкладу</span>
-            </label>
+            <div class="form-group">
+              <label class="auth-consent">
+                <input type="checkbox" formControlName="aiConsent" />
+                <span>Погоджуюсь на обробку історії звичок ШІ для персональних рекомендацій розкладу</span>
+              </label>
+              @if (showErr('aiConsent')) {
+                <span class="error-msg">Підтвердіть згоду на обробку даних для створення акаунта</span>
+              }
+            </div>
           }
 
           <button
@@ -129,6 +150,7 @@ export class AuthComponent {
   readonly loading = signal(false);
   readonly submitted = signal(false);
   readonly errorMsg = signal('');
+  readonly successMsg = signal('');
 
   readonly form = this.fb.nonNullable.group({
     displayName: [''],
@@ -142,19 +164,24 @@ export class AuthComponent {
     this.mode.set(target);
     this.submitted.set(false);
     this.errorMsg.set('');
+    this.successMsg.set('');
 
     const nameCtrl = this.form.controls.displayName;
     const passCtrl = this.form.controls.password;
+    const consentCtrl = this.form.controls.aiConsent;
 
     if (target === 'register') {
       nameCtrl.setValidators([Validators.required, Validators.minLength(2)]);
       passCtrl.setValidators([Validators.required, Validators.minLength(6)]);
+      consentCtrl.setValidators([Validators.requiredTrue]);
     } else {
       nameCtrl.clearValidators();
       passCtrl.setValidators([Validators.required]);
+      consentCtrl.clearValidators();
     }
     nameCtrl.updateValueAndValidity();
     passCtrl.updateValueAndValidity();
+    consentCtrl.updateValueAndValidity();
 
     this.form.reset({ displayName: '', email: '', password: '', aiConsent: true });
   }
@@ -165,8 +192,30 @@ export class AuthComponent {
     return ctrl.invalid;
   }
 
+  async onForgotPassword(): Promise<void> {
+    this.errorMsg.set('');
+    this.successMsg.set('');
+    const email = this.form.controls.email.value.trim();
+
+    if (!email || this.form.controls.email.invalid) {
+      this.errorMsg.set('Спочатку введіть вашу електронну пошту в поле вище.');
+      return;
+    }
+
+    this.loading.set(true);
+    try {
+      await this.authSvc.resetPassword(email);
+      this.successMsg.set(`Інструкцію для скидання пароля надіслано на ${email}.`);
+    } catch (err: unknown) {
+      this.errorMsg.set(err instanceof Error ? err.message : 'Не вдалося надіслати лист');
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
   async submit(): Promise<void> {
     this.submitted.set(true);
+    this.successMsg.set('');
     if (this.form.invalid) {
       return;
     }

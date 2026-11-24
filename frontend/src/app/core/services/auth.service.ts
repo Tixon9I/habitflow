@@ -5,6 +5,7 @@ import {
   EmailAuthProvider,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  sendPasswordResetEmail,
   reauthenticateWithCredential,
   signOut,
   onAuthStateChanged,
@@ -54,15 +55,33 @@ export class AuthService {
     tz: string,
     aiConsent = true
   ): Promise<void> {
+    const trimmedEmail = email.trim();
+    const trimmedName = name.trim();
+
+    if (trimmedName.length < 2) {
+      throw new Error("Введіть коректне ім'я (мінімум 2 символи).");
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      throw new Error('Введіть коректну електронну пошту.');
+    }
+    if (pass.length < 6) {
+      throw new Error('Пароль має містити щонайменше 6 символів.');
+    }
+    if (!aiConsent) {
+      throw new Error('Підтвердіть згоду на обробку даних для створення акаунта.');
+    }
+
+    let createdUser: FbUser | null = null;
     try {
-      const cred = await createUserWithEmailAndPassword(this.auth, email, pass);
+      const cred = await createUserWithEmailAndPassword(this.auth, trimmedEmail, pass);
+      createdUser = cred.user;
       const uid = cred.user.uid;
       const timezone = tz || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
       const userProfile: User = {
         idUser: uid,
-        email,
-        displayName: name.trim(),
+        email: trimmedEmail,
+        displayName: trimmedName,
         timezone,
         notificationLimit: 3,
         aiConsent,
@@ -77,6 +96,15 @@ export class AuthService {
       this.currentUser.set(userProfile);
       await this.router.navigate(['/']);
     } catch (err: unknown) {
+      if (createdUser) {
+        try {
+          await deleteUser(createdUser);
+        } catch {
+          await signOut(this.auth);
+        }
+        this.currentUser.set(null);
+        this._fbUser.set(null);
+      }
       throw new Error(this.mapFirebaseError(err));
     }
   }
@@ -86,6 +114,19 @@ export class AuthService {
       const cred = await signInWithEmailAndPassword(this.auth, email, pass);
       await this.loadUserProfile(cred.user.uid);
       await this.router.navigate(['/']);
+    } catch (err: unknown) {
+      throw new Error(this.mapFirebaseError(err));
+    }
+  }
+
+  async resetPassword(email: string): Promise<void> {
+    const trimmedEmail = email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      throw new Error('Введіть коректну електронну пошту для скидання пароля.');
+    }
+
+    try {
+      await sendPasswordResetEmail(this.auth, trimmedEmail);
     } catch (err: unknown) {
       throw new Error(this.mapFirebaseError(err));
     }
@@ -180,6 +221,9 @@ export class AuthService {
     if (message.includes('email-already-in-use')) {
       return 'Користувач із такою електронною поштою вже зареєстрований.';
     }
+    if (message.includes('invalid-email')) {
+      return 'Введіть коректну електронну пошту.';
+    }
     if (message.includes('wrong-password') || message.includes('invalid-credential')) {
       return 'Невірна електронна пошта або пароль.';
     }
@@ -191,6 +235,12 @@ export class AuthService {
     }
     if (message.includes('requires-recent-login')) {
       return 'Ця дія вимагає повторного входу в акаунт перед виконанням.';
+    }
+    if (message.includes('permission-denied')) {
+      return 'Недостатньо прав для запису профілю в базу даних.';
+    }
+    if (message.includes('network-request-failed')) {
+      return 'Помилка мережі. Перевірте підключення до Інтернету.';
     }
     return 'Помилка автентифікації. Спробуйте пізніше.';
   }
