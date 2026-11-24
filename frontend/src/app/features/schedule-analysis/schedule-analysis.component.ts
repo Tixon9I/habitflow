@@ -13,6 +13,7 @@ interface RecommendationCardVm {
   habit: Habit | null;
   habitTitle: string;
   riskLabel: string;
+  isBasicForecast: boolean;
   currentPlanLabel: string;
   medianActualTime: string;
   deviationLabel: string;
@@ -91,7 +92,12 @@ interface FeatureWeightItem {
               @for (item of cards(); track item.rec.idRecommendation) {
                 <article class="rec-card card">
                   <div class="rec-card__head">
-                    <h3>{{ item.habitTitle }}</h3>
+                    <div class="rec-card__title-group">
+                      <h3>{{ item.habitTitle }}</h3>
+                      @if (item.isBasicForecast) {
+                        <span class="badge badge--stable">Базовий прогноз</span>
+                      }
+                    </div>
                     <span class="badge badge--risk mono">
                       Ймовірність пропуску: {{ item.rec.riskScore.toFixed(2) }} ({{ item.riskLabel }})
                     </span>
@@ -255,6 +261,7 @@ export class ScheduleAnalysisComponent implements OnInit {
           habit,
           habitTitle: habit?.title ?? 'Звичка',
           riskLabel: this.mapRiskLabel(rec.riskLevel),
+          isBasicForecast: !this.health().online || this.isColdStartHabit(habit),
           currentPlanLabel,
           medianActualTime: medianTime,
           deviationLabel: deviation,
@@ -367,6 +374,13 @@ export class ScheduleAnalysisComponent implements OnInit {
         : `відхилення +${mins} хв`;
 
     return { medianTime, deviation };
+  }
+
+  private isColdStartHabit(habit: Habit | null): boolean {
+    if (!habit?.createdAt || typeof habit.createdAt.toDate !== 'function') return true;
+    const createdMs = habit.createdAt.toDate().getTime();
+    const days = (Date.now() - createdMs) / (1000 * 60 * 60 * 24);
+    return days < 14;
   }
 
   private formatTodayDotDate(): string {

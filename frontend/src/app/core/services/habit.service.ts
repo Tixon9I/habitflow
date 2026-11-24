@@ -143,7 +143,9 @@ export class HabitService {
     return collectionData(q, { idField: 'idLog' }) as Observable<HabitLog[]>;
   }
 
-  async seedDemoHistory(userId: string): Promise<void> {
+  async seedDemoHistory(userId: string): Promise<{ habits: Habit[]; logs: HabitLog[] }> {
+    await this.clearUserData(userId);
+
     const templates: DemoHabitTemplate[] = [
       {
         title: 'Читання фахової літератури',
@@ -193,22 +195,46 @@ export class HabitService {
     createdDate.setDate(today.getDate() - 30);
     const createdTimestamp = Timestamp.fromDate(createdDate);
 
+    const createdHabits: Habit[] = [];
+    const createdLogs: HabitLog[] = [];
+
     for (let hIdx = 0; hIdx < templates.length; hIdx++) {
       const tpl = templates[hIdx];
       const habitRef = doc(collection(this.fs, 'habits'));
+      const initialHistory: ScheduleHistoryEntry = {
+        changedAt: createdTimestamp,
+        oldTime: tpl.reminderTime,
+        oldDays: [1, 2, 3, 4, 5, 6, 7],
+      };
 
-      batch.set(habitRef, {
+      const habitDoc: Habit = {
+        idHabit: habitRef.id,
         idUser: userId,
         title: tpl.title,
         category: tpl.category,
         frequencyType: 'daily',
         targetDays: [1, 2, 3, 4, 5, 6, 7],
         reminderTime: tpl.reminderTime,
-        scheduleHistory: [],
+        scheduleHistory: [initialHistory],
         currentStreak: tpl.currentStreak,
         bestStreak: tpl.bestStreak,
         isActive: true,
         createdAt: createdTimestamp,
+      };
+      createdHabits.push(habitDoc);
+
+      batch.set(habitRef, {
+        idUser: habitDoc.idUser,
+        title: habitDoc.title,
+        category: habitDoc.category,
+        frequencyType: habitDoc.frequencyType,
+        targetDays: habitDoc.targetDays,
+        reminderTime: habitDoc.reminderTime,
+        scheduleHistory: habitDoc.scheduleHistory,
+        currentStreak: habitDoc.currentStreak,
+        bestStreak: habitDoc.bestStreak,
+        isActive: habitDoc.isActive,
+        createdAt: habitDoc.createdAt,
       });
 
       const [plannedH, plannedM] = tpl.reminderTime.split(':').map(Number);
@@ -230,11 +256,24 @@ export class HabitService {
         completedDate.setHours(Math.floor(totalMins / 60), totalMins % 60, 0, 0);
 
         const logRef = doc(collection(this.fs, 'habit_logs'));
+        const completedTs = Timestamp.fromDate(completedDate);
+        const targetDate = this.formatDate(d);
+
+        createdLogs.push({
+          idLog: logRef.id,
+          idHabit: habitRef.id,
+          idUser: userId,
+          targetDate,
+          completedAt: completedTs,
+          plannedTime: tpl.reminderTime,
+          delayMinutes,
+        });
+
         batch.set(logRef, {
           idHabit: habitRef.id,
           idUser: userId,
-          targetDate: this.formatDate(d),
-          completedAt: Timestamp.fromDate(completedDate),
+          targetDate,
+          completedAt: completedTs,
           plannedTime: tpl.reminderTime,
           delayMinutes,
         });
@@ -242,6 +281,30 @@ export class HabitService {
     }
 
     await batch.commit();
+    return { habits: createdHabits, logs: createdLogs };
+  }
+
+  private async clearUserData(userId: string): Promise<void> {
+    const colNames = ['habits', 'habit_logs', 'recommendations'];
+    const refs = [];
+
+    for (const colName of colNames) {
+      const snap = await getDocs(
+        query(collection(this.fs, colName), where('idUser', '==', userId))
+      );
+      for (const d of snap.docs) {
+        refs.push(d.ref);
+      }
+    }
+
+    const chunkSize = 400;
+    for (let i = 0; i < refs.length; i += chunkSize) {
+      const batch = writeBatch(this.fs);
+      for (const ref of refs.slice(i, i + chunkSize)) {
+        batch.delete(ref);
+      }
+      await batch.commit();
+    }
   }
 
   formatDate(date: Date): string {

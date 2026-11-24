@@ -4,6 +4,7 @@ import {
   collection,
   collectionData,
   doc,
+  deleteDoc,
   getDoc,
   getDocs,
   setDoc,
@@ -295,10 +296,16 @@ export class MlAnalysisService {
       query(ref, where('idUser', '==', userId), where('status', '==', 'pending'))
     );
 
+    const newHabitIds = new Set(recommendations.map((r) => r.idHabit));
     const pendingByHabit = new Map<string, string>();
+
     for (const d of existingPendingSnap.docs) {
       const data = d.data() as Recommendation;
-      pendingByHabit.set(data.idHabit, d.id);
+      if (!newHabitIds.has(data.idHabit)) {
+        await deleteDoc(d.ref);
+      } else {
+        pendingByHabit.set(data.idHabit, d.id);
+      }
     }
 
     for (const rec of recommendations) {

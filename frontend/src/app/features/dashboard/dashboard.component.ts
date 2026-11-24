@@ -5,7 +5,8 @@ import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { of, switchMap } from 'rxjs';
 import { AuthService } from '../../core/services/auth.service';
 import { HabitService } from '../../core/services/habit.service';
-import { Habit, HabitLog } from '../../core/models/habit.model';
+import { MlAnalysisService } from '../../core/services/ml-analysis.service';
+import { Habit, HabitLog, Recommendation } from '../../core/models/habit.model';
 import { HabitModalComponent } from '../habit-modal/habit-modal.component';
 
 type DayStatus = 'done' | 'missed' | 'neutral';
@@ -174,6 +175,7 @@ const UK_MONTHS_GENITIVE = [
 export class DashboardComponent {
   private readonly auth = inject(AuthService);
   private readonly habitService = inject(HabitService);
+  private readonly mlService = inject(MlAnalysisService);
 
   readonly today = new Date();
   readonly todayStr = this.habitService.formatDate(this.today);
@@ -203,20 +205,41 @@ export class DashboardComponent {
     { initialValue: [] as HabitLog[] }
   );
 
+  readonly recommendations = toSignal(
+    this.user$.pipe(switchMap((u) => (u ? this.mlService.getRecommendations(u.idUser) : of([])))),
+    { initialValue: [] as Recommendation[] }
+  );
+
   readonly todayHabits = computed(() =>
     this.habits()
       .filter((h) => h.frequencyType === 'daily' || h.targetDays.includes(this.todayIsoWeekday))
       .sort((a, b) => a.reminderTime.localeCompare(b.reminderTime))
   );
 
+  readonly pendingRecByHabit = computed(() => {
+    const map = new Map<string, Recommendation>();
+    for (const rec of this.recommendations()) {
+      if (rec.status === 'pending' && !map.has(rec.idHabit)) {
+        map.set(rec.idHabit, rec);
+      }
+    }
+    return map;
+  });
+
   readonly rows = computed<HabitRowVm[]>(() => {
     const allLogs = this.logs();
+    const pendingMap = this.pendingRecByHabit();
+
     return this.todayHabits().map((habit) => {
       const habitLogs = allLogs.filter((l) => l.idHabit === habit.idHabit);
       const completedDates = new Set(habitLogs.map((l) => l.targetDate));
       const completedToday = completedDates.has(this.todayStr);
       const last7Days = this.buildLast7Days(habit, completedDates);
-      const riskScore = this.estimateQuickRisk(habit, habitLogs, completedDates);
+
+      const pendingRec = pendingMap.get(habit.idHabit);
+      const riskScore = pendingRec
+        ? pendingRec.riskScore
+        : this.mlService.runLocalFallback(habit, habitLogs).riskScore;
       const riskPercent = Math.round(riskScore * 100);
 
       return {
@@ -224,7 +247,7 @@ export class DashboardComponent {
         completedToday,
         last7Days,
         riskPercent,
-        isRisky: riskScore >= 0.34,
+        isRisky: Boolean(pendingRec) || riskScore >= 0.4,
       };
     });
   });
@@ -236,7 +259,11 @@ export class DashboardComponent {
     return total === 0 ? 0 : Math.round((this.completedCount() / total) * 100);
   });
 
-  readonly riskyCount = computed(() => this.rows().filter((r) => r.isRisky).length);
+  readonly riskyCount = computed(() => {
+    const pendingCount = this.pendingRecByHabit().size;
+    if (pendingCount > 0) return pendingCount;
+    return this.rows().filter((r) => r.riskPercent >= 60).length;
+  });
 
   readonly riskyHabitsWord = computed(() => {
     const n = this.riskyCount();
@@ -297,46 +324,5 @@ export class DashboardComponent {
       }
     }
     return result;
-  }
-
-  private estimateQuickRisk(
-    habit: Habit,
-    habitLogs: HabitLog[],
-    completedDates: Set<string>
-  ): number {
-    let scheduled7 = 0;
-    let missed7 = 0;
-    let scheduledWeekend = 0;
-    let missedWeekend = 0;
-
-    for (let offset = 1; offset <= 7; offset++) {
-      const d = new Date(this.today);
-      d.setDate(this.today.getDate() - offset);
-      const isoDay = d.getDay() === 0 ? 7 : d.getDay();
-      const isScheduled = habit.frequencyType === 'daily' || habit.targetDays.includes(isoDay);
-      if (isScheduled) {
-        scheduled7++;
-        const done = completedDates.has(this.habitService.formatDate(d));
-        if (!done) missed7++;
-        if (isoDay === 6 || isoDay === 7) {
-          scheduledWeekend++;
-          if (!done) missedWeekend++;
-        }
-      }
-    }
-
-    const missRate7d = scheduled7 > 0 ? missed7 / scheduled7 : 0;
-    const weekendMissRate = scheduledWeekend > 0 ? missedWeekend / scheduledWeekend : 0;
-    const delays = habitLogs.map((l) => Math.max(0, l.delayMinutes));
-    const meanDelay =
-      delays.length > 0 ? delays.reduce((sum, v) => sum + v, 0) / delays.length : 0;
-
-    const score =
-      0.42 * (Math.min(meanDelay, 90) / 90) +
-      0.31 * missRate7d +
-      0.18 * weekendMissRate +
-      0.09 * (1 - Math.min(habit.currentStreak, 14) / 14);
-
-    return Math.min(1, Math.max(0, score));
   }
 }

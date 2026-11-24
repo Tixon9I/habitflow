@@ -4,6 +4,7 @@ import { RouterModule, Router, NavigationEnd } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
 import { HabitService } from './core/services/habit.service';
+import { MlAnalysisService } from './core/services/ml-analysis.service';
 import { ConfirmDialogService } from './core/services/confirm-dialog.service';
 import { ProfileModalComponent } from './features/profile-modal/profile-modal.component';
 import { HabitModalComponent } from './features/habit-modal/habit-modal.component';
@@ -97,6 +98,7 @@ import { ConfirmModalComponent } from './shared/confirm-modal/confirm-modal.comp
 export class AppComponent {
   readonly auth = inject(AuthService);
   private readonly habitService = inject(HabitService);
+  private readonly mlService = inject(MlAnalysisService);
   private readonly confirmDialog = inject(ConfirmDialogService);
   private readonly router = inject(Router);
 
@@ -124,16 +126,17 @@ export class AppComponent {
 
     const confirmed = await this.confirmDialog.open({
       eyebrow: 'ТЕСТОВІ ДАНІ',
-      title: 'Згенерувати 30-денну історію?',
-      message: 'Буде створено 5 звичок та реалістичну історію відміток за останні 30 днів для демонстрації статистики й ML-аналізу.',
-      confirmLabel: 'Згенерувати',
+      title: 'Завантажити 30-денний демо-набір?',
+      message: 'Поточні тестові звички буде замінено на 5 звичок із 30-денною історією відміток, після чого автоматично запуститься аналіз ризиків.',
+      confirmLabel: 'Завантажити',
       cancelLabel: 'Скасувати',
     });
     if (!confirmed) return;
 
     this.seeding.set(true);
     try {
-      await this.habitService.seedDemoHistory(user.idUser);
+      const { habits, logs } = await this.habitService.seedDemoHistory(user.idUser);
+      await this.mlService.analyzeHabits(habits, logs, user.notificationLimit || 3);
     } finally {
       this.seeding.set(false);
     }
