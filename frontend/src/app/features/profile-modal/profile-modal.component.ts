@@ -1,13 +1,13 @@
-import { Component, inject, output, signal } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
+import { ChangeDetectionStrategy, Component, inject, output, signal } from '@angular/core';
+import { ReactiveFormsModule, FormBuilder, Validators, AbstractControl } from '@angular/forms';
 import { AuthService } from '../../core/services/auth.service';
 import { getTimeZoneOptions, resolveTimeZone } from '../../core/utils/date-time.util';
 
 @Component({
   selector: 'app-profile-modal',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ReactiveFormsModule],
   template: `
     <div class="modal-overlay" (click)="close.emit()">
       <div class="modal" (click)="$event.stopPropagation()">
@@ -43,11 +43,12 @@ import { getTimeZoneOptions, resolveTimeZone } from '../../core/utils/date-time.
             <div class="form-group" style="margin-bottom: 1rem;">
               <label for="deletePassword">Підтвердіть поточний пароль</label>
               <input
+                #delPassInput
                 id="deletePassword"
                 class="form-control"
                 type="password"
                 [value]="deletePassword()"
-                (input)="deletePassword.set($any($event.target).value)"
+                (input)="deletePassword.set(delPassInput.value)"
                 placeholder="Введіть пароль"
                 autocomplete="current-password"
               />
@@ -272,7 +273,14 @@ export class ProfileModalComponent {
   readonly timezoneOptions = getTimeZoneOptions(this.user()?.timezone);
 
   readonly form = this.fb.nonNullable.group({
-    displayName: [this.user()?.displayName ?? '', [Validators.required, Validators.minLength(2)]],
+    displayName: [
+      this.user()?.displayName ?? '',
+      [
+        Validators.required,
+        (ctrl: AbstractControl) =>
+          String(ctrl.value ?? '').trim().length >= 2 ? null : { minlength: true },
+      ],
+    ],
     timezone: [resolveTimeZone(this.user()?.timezone), [Validators.required]],
     notificationLimit: [
       this.user()?.notificationLimit ?? 3,
@@ -287,7 +295,11 @@ export class ProfileModalComponent {
     this.errorMsg.set('');
 
     try {
-      await this.auth.updateProfile(this.form.getRawValue());
+      const raw = this.form.getRawValue();
+      await this.auth.updateProfile({
+        ...raw,
+        displayName: raw.displayName.trim(),
+      });
       this.saved.emit();
       this.close.emit();
     } catch (e: unknown) {
