@@ -14,24 +14,58 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == request.resource.data.idUser;
     }
 
+    function isValidUserPayload() {
+      return request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 2
+        && request.resource.data.notificationLimit is number
+        && request.resource.data.notificationLimit >= 1
+        && request.resource.data.notificationLimit <= 20;
+    }
+
+    function isValidHabitPayload() {
+      return request.resource.data.title is string
+        && request.resource.data.title.size() >= 1
+        && request.resource.data.targetDays is list
+        && request.resource.data.targetDays.size() >= 1
+        && request.resource.data.targetDays.size() <= 7;
+    }
+
+    function isValidLogPayload() {
+      return request.resource.data.idHabit is string
+        && request.resource.data.targetDate is string
+        && request.resource.data.delayMinutes is number;
+    }
+
+    function isValidRecommendationPayload() {
+      return request.resource.data.idHabit is string
+        && request.resource.data.riskScore is number
+        && request.resource.data.riskScore >= 0
+        && request.resource.data.riskScore <= 1
+        && request.resource.data.status in ['pending', 'accepted', 'dismissed'];
+    }
+
     match /users/{userId} {
-      allow read, update, delete: if isSignedIn() && (request.auth.uid == userId || request.auth.uid == resource.data.idUser);
-      allow create: if isSignedIn() && request.auth.uid == userId && request.auth.uid == request.resource.data.idUser;
+      allow read, delete: if isSignedIn() && (request.auth.uid == userId || request.auth.uid == resource.data.idUser);
+      allow update: if isSignedIn() && (request.auth.uid == userId || request.auth.uid == resource.data.idUser) && isValidUserPayload();
+      allow create: if isSignedIn() && request.auth.uid == userId && request.auth.uid == request.resource.data.idUser && isValidUserPayload();
     }
 
     match /habits/{habitId} {
-      allow read, update, delete: if isOwnerResource();
-      allow create: if isOwnerRequest();
+      allow read, delete: if isOwnerResource();
+      allow update: if isOwnerResource() && isOwnerRequest() && isValidHabitPayload();
+      allow create: if isOwnerRequest() && isValidHabitPayload();
     }
 
     match /habit_logs/{logId} {
-      allow read, update, delete: if isOwnerResource();
-      allow create: if isOwnerRequest();
+      allow read, delete: if isOwnerResource();
+      allow update: if isOwnerResource() && isOwnerRequest() && isValidLogPayload();
+      allow create: if isOwnerRequest() && isValidLogPayload();
     }
 
     match /recommendations/{recommendationId} {
-      allow read, update, delete: if isOwnerResource();
-      allow create: if isOwnerRequest();
+      allow read, delete: if isOwnerResource();
+      allow update: if isOwnerResource() && isOwnerRequest() && isValidRecommendationPayload();
+      allow create: if isOwnerRequest() && isValidRecommendationPayload();
     }
   }
 }
