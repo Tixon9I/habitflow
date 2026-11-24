@@ -2,19 +2,32 @@
   --bg: #F7F6F2;
   --surface: #FFFFFF;
   --surface-subtle: #F4F3EF;
+  --surface-hover: #FAFAF8;
+  --surface-dimmed: #FCFCFA;
   --ink: #18181B;
   --ink-secondary: #3F3F46;
   --ink-muted: #71717A;
   --ink-faint: #A1A1AA;
+  --btn-primary-bg: #18181B;
+  --btn-primary-hover: #27272A;
+  --btn-primary-text: #FFFFFF;
   --green: #166534;
-  --green-soft: #94B49F;
+  --green-bar: #2F7D4E;
+  --green-soft: #A3BEA9;
   --green-bg: #DCFCE7;
+  --green-border: #BBF7D0;
   --red: #991B1B;
   --red-bg: #FEF2F2;
   --red-border: #FECACA;
-  --yellow: #92400E;
-  --yellow-bg: #FEF9C3;
+  --missed-dot: #FDE2E2;
+  --amber: #B45309;
+  --amber-bg: #FEF3C7;
+  --amber-soft: #FEF9C3;
+  --late-dot: #C2410C;
+  --unscheduled-bar: #E5E4DF;
+  --scatter-band: #F2F1EC;
   --border: #E5E4DF;
+  --border-strong: #D4D4D0;
   --border-light: #F0EFEA;
   --radius-sm: 8px;
   --radius: 10px;
@@ -25,6 +38,43 @@
   --shadow-modal: 0 24px 48px rgba(24, 24, 27, 0.14), 0 4px 12px rgba(24, 24, 27, 0.06);
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #111110;
+  --surface: #1A1A18;
+  --surface-subtle: #242421;
+  --surface-hover: #20201D;
+  --surface-dimmed: #161614;
+  --ink: #F4F4F0;
+  --ink-secondary: #D4D4CE;
+  --ink-muted: #9C9C94;
+  --ink-faint: #6F6F68;
+  --btn-primary-bg: #F4F4F0;
+  --btn-primary-hover: #E2E2DC;
+  --btn-primary-text: #111110;
+  --green: #4ADE80;
+  --green-bar: #34D399;
+  --green-soft: #265942;
+  --green-bg: #12291C;
+  --green-border: #1F4D33;
+  --red: #F87171;
+  --red-bg: #2C1517;
+  --red-border: #5C2226;
+  --missed-dot: #4C1D22;
+  --amber: #FBBF24;
+  --amber-bg: #2E220D;
+  --amber-soft: #292110;
+  --late-dot: #FB923C;
+  --unscheduled-bar: #2E2E2A;
+  --scatter-band: #22221F;
+  --border: #2E2E2A;
+  --border-strong: #3F3F3A;
+  --border-light: #252522;
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow-modal: 0 24px 48px rgba(0, 0, 0, 0.65);
 }
 
 *, *::before, *::after {
@@ -108,11 +158,11 @@ p {
   }
 
   &--primary {
-    background: var(--ink);
-    color: #FFFFFF;
+    background: var(--btn-primary-bg);
+    color: var(--btn-primary-text);
 
     &:hover:not(:disabled) {
-      background: #27272A;
+      background: var(--btn-primary-hover);
     }
   }
 
@@ -123,7 +173,7 @@ p {
 
     &:hover:not(:disabled) {
       background: var(--surface-subtle);
-      border-color: #D4D4D0;
+      border-color: var(--border-strong);
       color: var(--ink);
     }
   }
