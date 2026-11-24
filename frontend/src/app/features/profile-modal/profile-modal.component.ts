@@ -2,6 +2,7 @@ import { Component, inject, output, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { AuthService } from '../../core/services/auth.service';
+import { getTimeZoneOptions, resolveTimeZone } from '../../core/utils/date-time.util';
 
 @Component({
   selector: 'app-profile-modal',
@@ -74,7 +75,7 @@ import { AuthService } from '../../core/services/auth.service';
         } @else {
           <form [formGroup]="form" (ngSubmit)="save()">
             <div class="form-group">
-              <label for="profileEmail">Email</label>
+              <label for="profileEmail">Електронна пошта</label>
               <input
                 id="profileEmail"
                 class="form-control mono"
@@ -97,12 +98,11 @@ import { AuthService } from '../../core/services/auth.service';
             <div class="profile-grid">
               <div class="form-group">
                 <label for="timezone">Часовий пояс</label>
-                <input
-                  id="timezone"
-                  class="form-control mono"
-                  type="text"
-                  formControlName="timezone"
-                />
+                <select id="timezone" class="form-control mono" formControlName="timezone">
+                  @for (tz of timezoneOptions; track tz.value) {
+                    <option [value]="tz.value">{{ tz.label }}</option>
+                  }
+                </select>
               </div>
 
               <div class="form-group">
@@ -122,7 +122,7 @@ import { AuthService } from '../../core/services/auth.service';
               <input type="checkbox" formControlName="aiConsent" />
               <span class="consent-box__text">
                 <strong>Персоналізація ШІ</strong>
-                <span>Дозволити формування текстових рекомендацій на основі історії чекінів</span>
+                <span>Дозволити формування текстових рекомендацій на основі історії відміток</span>
               </span>
             </label>
 
@@ -262,15 +262,18 @@ export class ProfileModalComponent {
   private readonly fb = inject(FormBuilder);
 
   readonly close = output<void>();
+  readonly saved = output<void>();
   readonly user = this.auth.currentUser;
   readonly loading = signal(false);
   readonly errorMsg = signal('');
   readonly confirmDeleteMode = signal(false);
   readonly deletePassword = signal('');
 
+  readonly timezoneOptions = getTimeZoneOptions(this.user()?.timezone);
+
   readonly form = this.fb.nonNullable.group({
     displayName: [this.user()?.displayName ?? '', [Validators.required, Validators.minLength(2)]],
-    timezone: [this.user()?.timezone ?? 'UTC', [Validators.required]],
+    timezone: [resolveTimeZone(this.user()?.timezone), [Validators.required]],
     notificationLimit: [
       this.user()?.notificationLimit ?? 3,
       [Validators.required, Validators.min(1), Validators.max(10)],
@@ -285,6 +288,7 @@ export class ProfileModalComponent {
 
     try {
       await this.auth.updateProfile(this.form.getRawValue());
+      this.saved.emit();
       this.close.emit();
     } catch (e: unknown) {
       this.errorMsg.set(e instanceof Error ? e.message : 'Помилка збереження');
