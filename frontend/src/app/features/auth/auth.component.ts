@@ -51,7 +51,7 @@ type AuthMode = 'login' | 'register';
           <div class="error-banner">{{ errorMsg() }}</div>
         }
 
-        <form [formGroup]="form" (ngSubmit)="submit()">
+        <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
           @if (mode() === 'register') {
             <div class="form-group">
               <label for="displayName">Ім'я</label>
@@ -80,7 +80,7 @@ type AuthMode = 'login' | 'register';
               autocomplete="email"
             />
             @if (showErr('email')) {
-              <span class="error-msg">Введіть коректний email</span>
+              <span class="error-msg">Введіть коректну електронну пошту</span>
             }
           </div>
 
@@ -91,11 +91,13 @@ type AuthMode = 'login' | 'register';
               class="form-control"
               type="password"
               formControlName="password"
-              placeholder="Мінімум 6 символів"
+              [placeholder]="mode() === 'register' ? 'Створіть пароль' : 'Введіть пароль'"
               autocomplete="current-password"
             />
             @if (showErr('password')) {
-              <span class="error-msg">Мінімум 6 символів</span>
+              <span class="error-msg">
+                {{ mode() === 'register' ? 'Пароль має містити щонайменше 6 символів' : 'Введіть пароль' }}
+              </span>
             }
           </div>
 
@@ -111,7 +113,7 @@ type AuthMode = 'login' | 'register';
             class="btn btn--primary btn--lg auth-submit"
             [disabled]="loading()"
           >
-            {{ loading() ? 'Завантаження...' : (mode() === 'register' ? 'Зареєструватися' : 'Увійти') }}
+            {{ loading() ? 'Завантаження...' : (mode() === 'register' ? 'Створити акаунт' : 'Увійти') }}
           </button>
         </form>
       </div>
@@ -125,41 +127,58 @@ export class AuthComponent {
 
   readonly mode = signal<AuthMode>('login');
   readonly loading = signal(false);
+  readonly submitted = signal(false);
   readonly errorMsg = signal('');
 
   readonly form = this.fb.nonNullable.group({
-    displayName: ['', [Validators.minLength(2)]],
+    displayName: [''],
     email: ['', [Validators.required, Validators.email]],
-    password: ['', [Validators.required, Validators.minLength(6)]],
+    password: ['', [Validators.required]],
     aiConsent: [true],
   });
 
   setMode(target: AuthMode): void {
     if (this.mode() === target) return;
     this.mode.set(target);
+    this.submitted.set(false);
     this.errorMsg.set('');
+
+    const nameCtrl = this.form.controls.displayName;
+    const passCtrl = this.form.controls.password;
+
+    if (target === 'register') {
+      nameCtrl.setValidators([Validators.required, Validators.minLength(2)]);
+      passCtrl.setValidators([Validators.required, Validators.minLength(6)]);
+    } else {
+      nameCtrl.clearValidators();
+      passCtrl.setValidators([Validators.required]);
+    }
+    nameCtrl.updateValueAndValidity();
+    passCtrl.updateValueAndValidity();
+
     this.form.reset({ displayName: '', email: '', password: '', aiConsent: true });
   }
 
   showErr(field: string): boolean {
+    if (!this.submitted()) return false;
     const ctrl = this.form.get(field) as AbstractControl;
-    return ctrl.invalid && (ctrl.dirty || ctrl.touched);
+    return ctrl.invalid;
   }
 
   async submit(): Promise<void> {
+    this.submitted.set(true);
     if (this.form.invalid) {
-      this.form.markAllAsTouched();
       return;
     }
 
     this.loading.set(true);
     this.errorMsg.set('');
-    const { email, password, displayName } = this.form.getRawValue();
+    const { email, password, displayName, aiConsent } = this.form.getRawValue();
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
     try {
       if (this.mode() === 'register') {
-        await this.authSvc.register(email, password, displayName, tz);
+        await this.authSvc.register(email, password, displayName, tz, aiConsent);
       } else {
         await this.authSvc.login(email, password);
       }

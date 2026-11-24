@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
 import { HabitService } from '../../core/services/habit.service';
 import { AuthService } from '../../core/services/auth.service';
+import { ConfirmDialogService } from '../../core/services/confirm-dialog.service';
 import { Habit, FrequencyType } from '../../core/models/habit.model';
 
 @Component({
@@ -188,6 +189,7 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
 export class HabitModalComponent implements OnInit {
   private readonly habitService = inject(HabitService);
   private readonly authService = inject(AuthService);
+  private readonly confirmDialog = inject(ConfirmDialogService);
   private readonly fb = inject(FormBuilder);
 
   readonly habit = input<Habit | null>(null);
@@ -310,7 +312,14 @@ export class HabitModalComponent implements OnInit {
     const existing = this.habit();
     if (!existing) return;
 
-    const confirmed = window.confirm(`Видалити звичку «${existing.title}»?`);
+    const confirmed = await this.confirmDialog.open({
+      eyebrow: 'ЗВИЧКА · ВИДАЛЕННЯ',
+      title: 'Видалити звичку?',
+      message: `Звичку «${existing.title}» буде видалено назавжди. Цю дію неможливо скасувати.`,
+      confirmLabel: 'Видалити',
+      cancelLabel: 'Скасувати',
+      danger: true,
+    });
     if (!confirmed) return;
 
     this.loading.set(true);

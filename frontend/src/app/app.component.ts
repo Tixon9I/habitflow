@@ -4,13 +4,21 @@ import { RouterModule, Router, NavigationEnd } from '@angular/router';
 import { filter } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
 import { HabitService } from './core/services/habit.service';
+import { ConfirmDialogService } from './core/services/confirm-dialog.service';
 import { ProfileModalComponent } from './features/profile-modal/profile-modal.component';
 import { HabitModalComponent } from './features/habit-modal/habit-modal.component';
+import { ConfirmModalComponent } from './shared/confirm-modal/confirm-modal.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, RouterModule, ProfileModalComponent, HabitModalComponent],
+  imports: [
+    CommonModule,
+    RouterModule,
+    ProfileModalComponent,
+    HabitModalComponent,
+    ConfirmModalComponent,
+  ],
   template: `
     @if (showNav()) {
       <header class="topnav">
@@ -81,12 +89,15 @@ import { HabitModalComponent } from './features/habit-modal/habit-modal.componen
     @if (showHabitModal()) {
       <app-habit-modal (close)="showHabitModal.set(false)" />
     }
+
+    <app-confirm-modal />
   `,
   styleUrls: ['./app.component.scss'],
 })
 export class AppComponent {
   readonly auth = inject(AuthService);
   private readonly habitService = inject(HabitService);
+  private readonly confirmDialog = inject(ConfirmDialogService);
   private readonly router = inject(Router);
 
   readonly showNav = signal(true);
@@ -111,9 +122,13 @@ export class AppComponent {
     const user = this.auth.currentUser();
     if (!user || this.seeding()) return;
 
-    const confirmed = window.confirm(
-      'Додати 5 тестових звичок та історію відміток за останні 30 днів?'
-    );
+    const confirmed = await this.confirmDialog.open({
+      eyebrow: 'ТЕСТОВІ ДАНІ',
+      title: 'Згенерувати 30-денну історію?',
+      message: 'Буде створено 5 звичок та реалістичну історію відміток за останні 30 днів для демонстрації статистики й ML-аналізу.',
+      confirmLabel: 'Згенерувати',
+      cancelLabel: 'Скасувати',
+    });
     if (!confirmed) return;
 
     this.seeding.set(true);

@@ -32,96 +32,137 @@ import { AuthService } from '../../core/services/auth.service';
           <div class="error-banner">{{ errorMsg() }}</div>
         }
 
-        <form [formGroup]="form" (ngSubmit)="save()">
-          <div class="form-group">
-            <label for="profileEmail">Email</label>
-            <input
-              id="profileEmail"
-              class="form-control mono"
-              type="text"
-              [value]="user()?.email ?? ''"
-              disabled
-            />
-          </div>
+        @if (confirmDeleteMode()) {
+          <div class="delete-confirm-box">
+            <div class="delete-confirm-box__title">Видалення облікового запису</div>
+            <p class="delete-confirm-box__desc">
+              Буде видалено ваш профіль, усі звички, історію відміток та рекомендації. Цю дію неможливо скасувати.
+            </p>
 
-          <div class="form-group">
-            <label for="displayName">Ім'я</label>
-            <input
-              id="displayName"
-              class="form-control"
-              type="text"
-              formControlName="displayName"
-            />
-          </div>
-
-          <div class="profile-grid">
-            <div class="form-group">
-              <label for="timezone">Часовий пояс</label>
+            <div class="form-group" style="margin-bottom: 1rem;">
+              <label for="deletePassword">Підтвердіть поточний пароль</label>
               <input
-                id="timezone"
+                id="deletePassword"
+                class="form-control"
+                type="password"
+                [value]="deletePassword()"
+                (input)="deletePassword.set($any($event.target).value)"
+                placeholder="Введіть пароль"
+                autocomplete="current-password"
+              />
+            </div>
+
+            <div class="delete-confirm-box__actions">
+              <button
+                type="button"
+                class="btn btn--secondary btn--sm"
+                (click)="cancelDeleteMode()"
+                [disabled]="loading()"
+              >
+                Назад
+              </button>
+              <button
+                type="button"
+                class="btn btn--danger btn--sm"
+                (click)="confirmDeleteAccount()"
+                [disabled]="loading() || deletePassword().length < 6"
+              >
+                {{ loading() ? 'Видалення...' : 'Підтвердити видалення' }}
+              </button>
+            </div>
+          </div>
+        } @else {
+          <form [formGroup]="form" (ngSubmit)="save()">
+            <div class="form-group">
+              <label for="profileEmail">Email</label>
+              <input
+                id="profileEmail"
                 class="form-control mono"
                 type="text"
-                formControlName="timezone"
+                [value]="user()?.email ?? ''"
+                disabled
               />
             </div>
 
             <div class="form-group">
-              <label for="notificationLimit">Ліміт порад / добу</label>
+              <label for="displayName">Ім'я</label>
               <input
-                id="notificationLimit"
-                class="form-control mono"
-                type="number"
-                formControlName="notificationLimit"
-                min="1"
-                max="10"
+                id="displayName"
+                class="form-control"
+                type="text"
+                formControlName="displayName"
               />
             </div>
-          </div>
 
-          <label class="consent-box">
-            <input type="checkbox" formControlName="aiConsent" />
-            <span class="consent-box__text">
-              <strong>Персоналізація ШІ</strong>
-              <span>Дозволити формування текстових рекомендацій на основі історії чекінів</span>
-            </span>
-          </label>
+            <div class="profile-grid">
+              <div class="form-group">
+                <label for="timezone">Часовий пояс</label>
+                <input
+                  id="timezone"
+                  class="form-control mono"
+                  type="text"
+                  formControlName="timezone"
+                />
+              </div>
 
-          <hr class="modal-divider" />
+              <div class="form-group">
+                <label for="notificationLimit">Ліміт порад / добу</label>
+                <input
+                  id="notificationLimit"
+                  class="form-control mono"
+                  type="number"
+                  formControlName="notificationLimit"
+                  min="1"
+                  max="10"
+                />
+              </div>
+            </div>
 
-          <div class="modal-footer">
-            <div class="profile-actions-left">
+            <label class="consent-box">
+              <input type="checkbox" formControlName="aiConsent" />
+              <span class="consent-box__text">
+                <strong>Персоналізація ШІ</strong>
+                <span>Дозволити формування текстових рекомендацій на основі історії чекінів</span>
+              </span>
+            </label>
+
+            <div class="account-strip">
               <button
                 type="button"
                 class="btn btn--ghost btn--sm"
                 (click)="onLogout()"
                 [disabled]="loading()"
               >
-                Вийти
+                Вийти з акаунта
               </button>
               <button
                 type="button"
                 class="btn btn--danger-ghost btn--sm"
-                (click)="onDeleteAccount()"
+                (click)="openDeleteMode()"
                 [disabled]="loading()"
               >
                 Видалити акаунт
               </button>
             </div>
 
-            <div class="modal-footer__right">
-              <button type="button" class="btn btn--secondary" (click)="close.emit()">
-                Скасувати
-              </button>
-              <button
-                type="submit"
-                class="btn btn--primary"
-                [disabled]="loading() || form.invalid"
-              >
-                {{ loading() ? 'Збереження...' : 'Зберегти' }}
-              </button>
+            <hr class="modal-divider" />
+
+            <div class="modal-footer">
+              <div class="modal-footer__right">
+                <button type="button" class="btn btn--secondary" (click)="close.emit()" [disabled]="loading()">
+                  Скасувати
+                </button>
+                <button
+                  type="submit"
+                  class="btn btn--primary profile-save-btn"
+                  [disabled]="loading() || form.invalid"
+                >
+                  {{ loading() ? 'Збереження...' : 'Зберегти' }}
+                </button>
+              </div>
             </div>
-          </div>
-        </form>
+          </form>
+        }
       </div>
     </div>
   `,
@@ -169,26 +210,49 @@ import { AuthService } from '../../core/services/auth.service';
       }
     }
 
-    .profile-actions-left {
+    .account-strip {
       display: flex;
+      justify-content: space-between;
       align-items: center;
-      gap: 0.25rem;
+      margin-top: 1rem;
+      padding: 0.5rem 0.25rem 0;
+    }
+
+    .profile-save-btn {
+      min-width: 124px;
+    }
+
+    .delete-confirm-box {
+      padding: 1.125rem;
+      border-radius: var(--radius);
+      border: 1px solid var(--red-border);
+      background: var(--red-bg);
+
+      &__title {
+        font-size: 0.9375rem;
+        font-weight: 700;
+        color: var(--red);
+        margin-bottom: 0.35rem;
+      }
+
+      &__desc {
+        font-size: 0.8125rem;
+        color: var(--ink-secondary);
+        line-height: 1.5;
+        margin-bottom: 1rem;
+      }
+
+      &__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.625rem;
+      }
     }
 
     @media (max-width: 560px) {
       .profile-grid {
         grid-template-columns: 1fr;
         gap: 0;
-      }
-
-      .modal-footer {
-        flex-direction: column-reverse;
-        align-items: stretch;
-      }
-
-      .profile-actions-left,
-      .modal-footer__right {
-        justify-content: flex-end;
       }
     }
   `],
@@ -201,6 +265,8 @@ export class ProfileModalComponent {
   readonly user = this.auth.currentUser;
   readonly loading = signal(false);
   readonly errorMsg = signal('');
+  readonly confirmDeleteMode = signal(false);
+  readonly deletePassword = signal('');
 
   readonly form = this.fb.nonNullable.group({
     displayName: [this.user()?.displayName ?? '', [Validators.required, Validators.minLength(2)]],
@@ -239,17 +305,25 @@ export class ProfileModalComponent {
     }
   }
 
-  async onDeleteAccount(): Promise<void> {
-    const confirmed = window.confirm(
-      'Ви впевнені, що хочете видалити свій акаунт? Цю дію неможливо скасувати.'
-    );
-    if (!confirmed) return;
+  openDeleteMode(): void {
+    this.errorMsg.set('');
+    this.deletePassword.set('');
+    this.confirmDeleteMode.set(true);
+  }
 
+  cancelDeleteMode(): void {
+    this.errorMsg.set('');
+    this.deletePassword.set('');
+    this.confirmDeleteMode.set(false);
+  }
+
+  async confirmDeleteAccount(): Promise<void> {
+    if (this.deletePassword().length < 6) return;
     this.loading.set(true);
     this.errorMsg.set('');
 
     try {
-      await this.auth.deleteAccount();
+      await this.auth.deleteAccount(this.deletePassword());
       this.close.emit();
     } catch (e: unknown) {
       this.errorMsg.set(e instanceof Error ? e.message : 'Помилка видалення акаунта');
