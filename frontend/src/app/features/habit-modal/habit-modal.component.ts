@@ -105,37 +105,37 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
             />
           </div>
 
+          @if (habit()) {
+            <div class="habit-actions-strip">
+              <button
+                type="button"
+                class="btn btn--ghost btn--sm"
+                (click)="onArchive()"
+                [disabled]="loading()"
+              >
+                Архівувати звичку
+              </button>
+              <button
+                type="button"
+                class="btn btn--danger-ghost btn--sm"
+                (click)="onDelete()"
+                [disabled]="loading()"
+              >
+                Видалити звичку
+              </button>
+            </div>
+          }
+
           <hr class="modal-divider" />
 
           <div class="modal-footer">
-            @if (habit()) {
-              <div class="modal-footer__danger">
-                <button
-                  type="button"
-                  class="btn btn--ghost btn--sm"
-                  (click)="onArchive()"
-                  [disabled]="loading()"
-                >
-                  Архівувати
-                </button>
-                <button
-                  type="button"
-                  class="btn btn--danger-ghost btn--sm"
-                  (click)="onDelete()"
-                  [disabled]="loading()"
-                >
-                  Видалити
-                </button>
-              </div>
-            }
-
             <div class="modal-footer__right">
-              <button type="button" class="btn btn--secondary" (click)="close.emit()">
+              <button type="button" class="btn btn--secondary" (click)="close.emit()" [disabled]="loading()">
                 Скасувати
               </button>
               <button
                 type="submit"
-                class="btn btn--primary"
+                class="btn btn--primary habit-save-btn"
                 [disabled]="loading() || form.invalid"
               >
                 {{ loading() ? 'Збереження...' : 'Зберегти' }}
@@ -179,10 +179,15 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
       }
     }
 
-    .modal-footer__danger {
+    .habit-actions-strip {
       display: flex;
+      justify-content: space-between;
       align-items: center;
-      gap: 0.25rem;
+      margin-top: 0.5rem;
+    }
+
+    .habit-save-btn {
+      min-width: 124px;
     }
   `],
 })
@@ -267,18 +272,29 @@ export class HabitModalComponent implements OnInit {
     try {
       const existing = this.habit();
       if (existing) {
-        if (
+        const nextTitle = formVal.title.trim();
+        if (existing.title !== nextTitle || existing.category !== formVal.category) {
+          await this.habitService.updateHabitDetails(existing.idHabit, {
+            title: nextTitle,
+            category: formVal.category,
+          });
+        }
+
+        const scheduleChanged =
           existing.reminderTime !== formVal.reminderTime ||
-          JSON.stringify(existing.targetDays) !== JSON.stringify(days)
-        ) {
+          existing.frequencyType !== (days.length === 7 ? 'daily' : 'custom') ||
+          JSON.stringify([...existing.targetDays].sort((a, b) => a - b)) !==
+            JSON.stringify([...days].sort((a, b) => a - b));
+
+        if (scheduleChanged) {
           await this.habitService.updateHabitSchedule(existing, formVal.reminderTime, days);
         }
       } else {
         await this.habitService.createHabit({
           idUser: user.idUser,
-          title: formVal.title,
+          title: formVal.title.trim(),
           category: formVal.category,
-          frequencyType: formVal.frequencyType,
+          frequencyType: days.length === 7 ? 'daily' : 'custom',
           targetDays: days,
           reminderTime: formVal.reminderTime,
           scheduleHistory: [],

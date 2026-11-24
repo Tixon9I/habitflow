@@ -46,16 +46,30 @@ export class HabitService {
     habit: Omit<Habit, 'idHabit' | 'createdAt' | 'currentStreak' | 'bestStreak'>
   ): Promise<string> {
     const ref = collection(this.fs, 'habits');
+    const initialHistory: ScheduleHistoryEntry = {
+      changedAt: Timestamp.now(),
+      oldTime: habit.reminderTime,
+      oldDays: habit.targetDays,
+    };
     const payload = {
       ...habit,
+      frequencyType: habit.targetDays.length === 7 ? 'daily' : 'custom',
       currentStreak: 0,
       bestStreak: 0,
       isActive: true,
-      scheduleHistory: [],
+      scheduleHistory: [initialHistory],
       createdAt: serverTimestamp(),
     };
     const res = await addDoc(ref, payload);
     return res.id;
+  }
+
+  async updateHabitDetails(
+    habitId: string,
+    patch: { title: string; category: string }
+  ): Promise<void> {
+    const habitRef = doc(this.fs, 'habits', habitId);
+    await updateDoc(habitRef, patch);
   }
 
   async updateHabitSchedule(habit: Habit, newTime: string, newDays: number[]): Promise<void> {
@@ -69,6 +83,7 @@ export class HabitService {
     await updateDoc(habitRef, {
       reminderTime: newTime,
       targetDays: newDays,
+      frequencyType: newDays.length === 7 ? 'daily' : 'custom',
       scheduleHistory: [...(habit.scheduleHistory ?? []), historyItem],
     });
   }
