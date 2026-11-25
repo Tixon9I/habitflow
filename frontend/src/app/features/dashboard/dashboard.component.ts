@@ -1,5 +1,4 @@
-import { Component, inject, signal, computed } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { ChangeDetectionStrategy, Component, inject, signal, computed } from '@angular/core';
 import { RouterModule } from '@angular/router';
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { of, switchMap } from 'rxjs';
@@ -8,15 +7,27 @@ import { HabitService } from '../../core/services/habit.service';
 import { MlAnalysisService } from '../../core/services/ml-analysis.service';
 import { Habit, HabitLog, Recommendation } from '../../core/models/habit.model';
 import { HabitModalComponent } from '../habit-modal/habit-modal.component';
+import {
+  getHabitCreatedDateStr,
+  getZonedDateParts,
+  resolveTimeZone,
+} from '../../core/utils/date-time.util';
 
 type DayStatus = 'done' | 'missed' | 'neutral';
+type DashboardFilter = 'today' | 'all' | 'archived';
 
 interface HabitRowVm {
   habit: Habit;
+  scheduledToday: boolean;
   completedToday: boolean;
+  isOverdue: boolean;
+  daysLabel: string;
+  streak: number;
   last7Days: DayStatus[];
   riskPercent: number;
   isRisky: boolean;
+  isAdapted: boolean;
+  isNewHabit: boolean;
 }
 
 const UK_WEEKDAYS = [
@@ -28,6 +39,16 @@ const UK_WEEKDAYS = [
   "П'ятниця",
   'Субота',
 ];
+
+const UK_SHORT_DAYS: Record<number, string> = {
+  1: 'Пн',
+  2: 'Вт',
+  3: 'Ср',
+  4: 'Чт',
+  5: 'Пт',
+  6: 'Сб',
+  7: 'Нд',
+};
 
 const UK_MONTHS_GENITIVE = [
   'січня',
@@ -47,13 +68,14 @@ const UK_MONTHS_GENITIVE = [
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, RouterModule, HabitModalComponent],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [RouterModule, HabitModalComponent],
   template: `
     <main class="page">
       <section class="today-header">
         <div class="today-header__left">
-          <span class="eyebrow">{{ todayEyebrow }}</span>
-          <h1>{{ todayTitle }}</h1>
+          <span class="eyebrow">{{ todayEyebrow() }}</span>
+          <h1>{{ todayTitle() }}</h1>
         </div>
 
         <div class="today-progress">
@@ -69,39 +91,122 @@ const UK_MONTHS_GENITIVE = [
         </div>
       </section>
 
+      <div class="dashboard-toolbar">
+        <div class="filter-switch" role="tablist" aria-label="Фільтр звичок">
+          <button
+            type="button"
+            class="filter-switch__btn"
+            [class.active]="activeFilter() === 'today'"
+            (click)="activeFilter.set('today')"
+          >
+            На сьогодні <span class="mono filter-count">{{ todayRows().length }}</span>
+          </button>
+          <button
+            type="button"
+            class="filter-switch__btn"
+            [class.active]="activeFilter() === 'all'"
+            (click)="activeFilter.set('all')"
+          >
+            Усі активні <span class="mono filter-count">{{ activeHabits().length }}</span>
+          </button>
+          <button
+            type="button"
+            class="filter-switch__btn"
+            [class.active]="activeFilter() === 'archived'"
+            (click)="activeFilter.set('archived')"
+          >
+            Архів <span class="mono filter-count">{{ archivedHabits().length }}</span>
+          </button>
+        </div>
+      </div>
+
+      @if (errorMsg()) {
+        <div class="error-banner">{{ errorMsg() }}</div>
+      }
+
+      @if (activeFilter() === 'today' && yesterdayPendingHabits().length > 0) {
+        <section class="yesterday-card card">
+          <div class="yesterday-card__head">
+            <span class="eyebrow">УЧОРАШНІЙ ДЕНЬ · {{ yesterdayLabel() }}</span>
+            <span class="yesterday-card__hint">Підтвердьте виконання, щоб зберегти серію</span>
+          </div>
+
+          <div class="yesterday-list">
+            @for (h of yesterdayPendingHabits(); track h.idHabit) {
+              <div class="yesterday-item">
+                <span class="yesterday-item__text">
+                  Ви виконали вчора звичку <strong>«{{ h.title }}»</strong>?
+                </span>
+                <div class="yesterday-item__actions">
+                  <button
+                    type="button"
+                    class="btn btn--primary btn--sm"
+                    [disabled]="busyHabitId() === h.idHabit"
+                    (click)="onConfirmYesterday(h)"
+                  >
+                    Так, виконано
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn--secondary btn--sm"
+                    [disabled]="busyHabitId() === h.idHabit"
+                    (click)="onDismissYesterday(h)"
+                  >
+                    Ні, пропуск
+                  </button>
+                </div>
+              </div>
+            }
+          </div>
+        </section>
+      }
+
       <section class="habits-card">
         <div class="habits-table__head">
           <span>ЗВИЧКА</span>
           <span>ОСТАННІ 7 ДНІВ</span>
           <span>ЧАС · СЕРІЯ</span>
-          <span class="col-status">СТАТУС</span>
+          <span class="col-status">{{ activeFilter() === 'archived' ? 'ДІЯ' : 'СТАТУС' }}</span>
         </div>
 
-        @if (rows().length === 0) {
+        @if (displayedRows().length === 0) {
           <div class="habits-empty">
-            <p>На сьогодні ще немає запланованих звичок.</p>
-            <button type="button" class="btn btn--primary btn--sm" (click)="openNewModal()">
-              + Додати першу звичку
-            </button>
+            @if (activeFilter() === 'archived') {
+              <p>Архів порожній.</p>
+            } @else if (activeFilter() === 'today' && activeHabits().length > 0) {
+              <p>На сьогодні немає запланованих звичок. Перегляньте вкладку «Усі активні», щоб побачити решту графіка.</p>
+              <button type="button" class="btn btn--secondary btn--sm" (click)="activeFilter.set('all')">
+                Показати усі активні ({{ activeHabits().length }})
+              </button>
+            } @else {
+              <p>Ще немає створених звичок.</p>
+              <button type="button" class="btn btn--primary btn--sm" (click)="openNewModal()">
+                + Додати першу звичку
+              </button>
+            }
           </div>
         } @else {
-          @for (row of rows(); track row.habit.idHabit) {
-            <div class="habit-row">
+          @for (row of displayedRows(); track row.habit.idHabit) {
+            <div class="habit-row" [class.habit-row--dimmed]="!row.scheduledToday && activeFilter() === 'all'">
               <div class="habit-row__main">
-                <button
-                  type="button"
-                  class="checkin-box"
-                  [class.checkin-box--checked]="row.completedToday"
-                  [disabled]="busyHabitId() === row.habit.idHabit"
-                  (click)="onToggleCheckIn(row.habit)"
-                  [attr.aria-label]="'Відмітити ' + row.habit.title"
-                >
-                  @if (row.completedToday) {
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
-                  }
-                </button>
+                @if (activeFilter() !== 'archived') {
+                  <button
+                    type="button"
+                    class="checkin-box"
+                    [class.checkin-box--checked]="row.completedToday"
+                    [class.checkin-box--inactive]="!row.scheduledToday"
+                    [disabled]="!row.scheduledToday || busyHabitId() === row.habit.idHabit"
+                    (click)="onToggleCheckIn(row.habit)"
+                    [title]="row.scheduledToday ? 'Відмітити виконання' : 'Не заплановано на сьогодні'"
+                    [attr.aria-label]="'Відмітити ' + row.habit.title"
+                  >
+                    @if (row.completedToday) {
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                      </svg>
+                    }
+                  </button>
+                }
 
                 <button
                   type="button"
@@ -112,6 +217,10 @@ const UK_MONTHS_GENITIVE = [
                 </button>
 
                 <span class="badge badge--category">{{ row.habit.category }}</span>
+
+                @if (activeFilter() !== 'today' && row.daysLabel) {
+                  <span class="badge badge--days mono">{{ row.daysLabel }}</span>
+                }
               </div>
 
               <div class="habit-row__dots" aria-label="Останні 7 днів">
@@ -125,13 +234,37 @@ const UK_MONTHS_GENITIVE = [
               </div>
 
               <div class="habit-row__meta">
-                <span class="mono habit-row__time">{{ row.habit.reminderTime }}</span>
-                <span class="habit-row__sep" aria-hidden="true"></span>
-                <span class="habit-row__streak">{{ row.habit.currentStreak }} дн.</span>
+                <span
+                  class="mono habit-row__time"
+                  [class.habit-row__time--overdue]="row.isOverdue"
+                >
+                  {{ row.habit.reminderTime }}
+                </span>
+                @if (row.isOverdue) {
+                  <span class="overdue-pill">час минув</span>
+                } @else {
+                  <span class="habit-row__sep" aria-hidden="true"></span>
+                  <span class="habit-row__streak">{{ row.streak }} дн.</span>
+                }
               </div>
 
               <div class="habit-row__status">
-                @if (row.isRisky) {
+                @if (activeFilter() === 'archived') {
+                  <button
+                    type="button"
+                    class="btn btn--secondary btn--sm"
+                    [disabled]="busyHabitId() === row.habit.idHabit"
+                    (click)="onRestore(row.habit)"
+                  >
+                    Відновити
+                  </button>
+                } @else if (!row.scheduledToday) {
+                  <span class="badge badge--stable">Не сьогодні</span>
+                } @else if (row.isAdapted) {
+                  <span class="badge badge--stable">Адаптовано</span>
+                } @else if (row.isNewHabit) {
+                  <span class="badge badge--stable">Нова звичка</span>
+                } @else if (row.isRisky) {
                   <span class="badge badge--risk">Ризик пропуску: {{ row.riskPercent }}%</span>
                 } @else {
                   <span class="badge badge--stable">Стабільно ({{ row.riskPercent }}%)</span>
@@ -141,7 +274,7 @@ const UK_MONTHS_GENITIVE = [
           }
         }
 
-        @if (riskyCount() > 0) {
+        @if (activeFilter() === 'today' && riskyCount() > 0) {
           <a class="habits-banner" routerLink="/schedule">
             <span class="habits-banner__icon" aria-hidden="true">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -177,27 +310,75 @@ export class DashboardComponent {
   private readonly habitService = inject(HabitService);
   private readonly mlService = inject(MlAnalysisService);
 
-  readonly today = new Date();
-  readonly todayStr = this.habitService.formatDate(this.today);
-  readonly todayIsoWeekday = this.today.getDay() === 0 ? 7 : this.today.getDay();
+  readonly userTimeZone = computed(() => resolveTimeZone(this.auth.currentUser()?.timezone));
 
-  readonly todayEyebrow = `${UK_WEEKDAYS[this.today.getDay()].toUpperCase()} · ${String(
-    this.today.getDate()
-  ).padStart(2, '0')} ${UK_MONTHS_GENITIVE[this.today.getMonth()].toUpperCase()}`;
+  readonly todayParts = computed(() => getZonedDateParts(new Date(), this.userTimeZone()));
+  readonly todayDate = computed(() => {
+    const p = this.todayParts();
+    return new Date(p.year, p.month - 1, p.day);
+  });
+  readonly todayStr = computed(() => this.todayParts().dateStr);
+  readonly todayIsoWeekday = computed(() => this.todayParts().isoWeekday);
 
-  readonly todayTitle = `${UK_WEEKDAYS[this.today.getDay()]}, ${this.today.getDate()} ${
-    UK_MONTHS_GENITIVE[this.today.getMonth()]
-  }`;
+  readonly yesterdayDate = computed(() => {
+    const d = new Date(this.todayDate());
+    d.setDate(d.getDate() - 1);
+    return d;
+  });
+  readonly yesterdayStr = computed(() => this.habitService.formatDate(this.yesterdayDate()));
+  readonly yesterdayIsoWeekday = computed(() => {
+    const day = this.yesterdayDate().getDay();
+    return day === 0 ? 7 : day;
+  });
+  readonly yesterdayLabel = computed(() => {
+    const d = this.yesterdayDate();
+    return `${String(d.getDate()).padStart(2, '0')} ${UK_MONTHS_GENITIVE[d.getMonth()].toUpperCase()}`;
+  });
 
+  readonly todayEyebrow = computed(() => {
+    const p = this.todayParts();
+    return `${UK_WEEKDAYS[p.weekday].toUpperCase()} · ${String(p.day).padStart(2, '0')} ${UK_MONTHS_GENITIVE[
+      p.month - 1
+    ].toUpperCase()}`;
+  });
+
+  readonly todayTitle = computed(() => {
+    const p = this.todayParts();
+    return `${UK_WEEKDAYS[p.weekday]}, ${p.day} ${UK_MONTHS_GENITIVE[p.month - 1]}`;
+  });
+
+  readonly activeFilter = signal<DashboardFilter>('today');
   readonly busyHabitId = signal<string | null>(null);
+  readonly errorMsg = signal('');
   readonly modalOpen = signal(false);
   readonly editingHabit = signal<Habit | null>(null);
+  private readonly yesterdayDismissRev = signal(0);
+
+  readonly dismissedYesterdayIds = computed<Set<string>>(() => {
+    this.yesterdayDismissRev();
+    const uid = this.auth.currentUser()?.idUser;
+    const dateKey = this.todayStr();
+    if (!uid) return new Set();
+    return this.loadDismissedYesterday(uid, dateKey);
+  });
 
   private readonly user$ = toObservable(this.auth.currentUser);
 
-  readonly habits = toSignal(
-    this.user$.pipe(switchMap((u) => (u ? this.habitService.getHabits(u.idUser) : of([])))),
+  readonly allHabits = toSignal(
+    this.user$.pipe(switchMap((u) => (u ? this.habitService.getAllHabits(u.idUser) : of([])))),
     { initialValue: [] as Habit[] }
+  );
+
+  readonly activeHabits = computed(() =>
+    this.allHabits()
+      .filter((h) => h.isActive)
+      .sort((a, b) => a.reminderTime.localeCompare(b.reminderTime))
+  );
+
+  readonly archivedHabits = computed(() =>
+    this.allHabits()
+      .filter((h) => !h.isActive)
+      .sort((a, b) => a.title.localeCompare(b.title))
   );
 
   readonly logs = toSignal(
@@ -210,60 +391,76 @@ export class DashboardComponent {
     { initialValue: [] as Recommendation[] }
   );
 
-  readonly todayHabits = computed(() =>
-    this.habits()
-      .filter((h) => h.frequencyType === 'daily' || h.targetDays.includes(this.todayIsoWeekday))
-      .sort((a, b) => a.reminderTime.localeCompare(b.reminderTime))
-  );
-
   readonly pendingRecByHabit = computed(() => {
+    const activeIds = new Set(this.activeHabits().map((h) => h.idHabit));
     const map = new Map<string, Recommendation>();
     for (const rec of this.recommendations()) {
-      if (rec.status === 'pending' && !map.has(rec.idHabit)) {
+      if (rec.status === 'pending' && activeIds.has(rec.idHabit) && !map.has(rec.idHabit)) {
         map.set(rec.idHabit, rec);
       }
     }
     return map;
   });
 
-  readonly rows = computed<HabitRowVm[]>(() => {
+  readonly adaptedHabitIds = computed(() => {
+    const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const set = new Set<string>();
+    for (const rec of this.recommendations()) {
+      const ts = rec.generatedAt?.toMillis?.() ?? 0;
+      if (rec.status === 'accepted' && ts >= sevenDaysAgoMs) {
+        set.add(rec.idHabit);
+      }
+    }
+    return set;
+  });
+
+  readonly todayRows = computed<HabitRowVm[]>(() => {
+    const todayIso = this.todayIsoWeekday();
+    return this.activeHabits()
+      .filter((h) => h.frequencyType === 'daily' || h.targetDays.includes(todayIso))
+      .map((h) => this.buildRowVm(h));
+  });
+
+  readonly yesterdayPendingHabits = computed<Habit[]>(() => {
+    const dismissed = this.dismissedYesterdayIds();
     const allLogs = this.logs();
-    const pendingMap = this.pendingRecByHabit();
+    const yIso = this.yesterdayIsoWeekday();
+    const yStr = this.yesterdayStr();
 
-    return this.todayHabits().map((habit) => {
-      const habitLogs = allLogs.filter((l) => l.idHabit === habit.idHabit);
-      const completedDates = new Set(habitLogs.map((l) => l.targetDate));
-      const completedToday = completedDates.has(this.todayStr);
-      const last7Days = this.buildLast7Days(habit, completedDates);
+    return this.activeHabits().filter((habit) => {
+      if (dismissed.has(habit.idHabit)) return false;
 
-      const pendingRec = pendingMap.get(habit.idHabit);
-      const riskScore = pendingRec
-        ? pendingRec.riskScore
-        : this.mlService.runLocalFallback(habit, habitLogs).riskScore;
-      const riskPercent = Math.round(riskScore * 100);
+      const scheduledYesterday =
+        habit.frequencyType === 'daily' || habit.targetDays.includes(yIso);
+      if (!scheduledYesterday) return false;
 
-      return {
-        habit,
-        completedToday,
-        last7Days,
-        riskPercent,
-        isRisky: Boolean(pendingRec) || riskScore >= 0.4,
-      };
+      const createdDateStr = getHabitCreatedDateStr(habit.createdAt, this.userTimeZone());
+      if (createdDateStr && createdDateStr > yStr) {
+        return false;
+      }
+
+      const doneYesterday = allLogs.some(
+        (l) => l.idHabit === habit.idHabit && l.targetDate === yStr
+      );
+      return !doneYesterday;
     });
   });
 
-  readonly totalCount = computed(() => this.rows().length);
-  readonly completedCount = computed(() => this.rows().filter((r) => r.completedToday).length);
+  readonly displayedRows = computed<HabitRowVm[]>(() => {
+    const filter = this.activeFilter();
+    if (filter === 'today') return this.todayRows();
+    if (filter === 'all') return this.activeHabits().map((h) => this.buildRowVm(h));
+    return this.archivedHabits().map((h) => this.buildRowVm(h));
+  });
+
+  readonly totalCount = computed(() => this.todayRows().length);
+  readonly completedCount = computed(() => this.todayRows().filter((r) => r.completedToday).length);
   readonly completionPercent = computed(() => {
     const total = this.totalCount();
     return total === 0 ? 0 : Math.round((this.completedCount() / total) * 100);
   });
 
-  readonly riskyCount = computed(() => {
-    const pendingCount = this.pendingRecByHabit().size;
-    if (pendingCount > 0) return pendingCount;
-    return this.rows().filter((r) => r.riskPercent >= 60).length;
-  });
+  readonly riskyCount = computed(() => this.pendingRecByHabit().size);
 
   readonly riskyHabitsWord = computed(() => {
     const n = this.riskyCount();
@@ -272,23 +469,68 @@ export class DashboardComponent {
   });
 
   readonly nextReminderLabel = computed(() => {
-    const pending = this.rows()
+    const nowMin = this.nowMinutes();
+    const pending = this.todayRows()
       .filter((r) => !r.completedToday)
       .map((r) => r.habit.reminderTime)
       .sort();
+
     if (pending.length === 0) {
       return this.totalCount() > 0 ? 'УСІ ЗВИЧКИ ВИКОНАНО' : 'НЕМАЄ ЗАПЛАНОВАНИХ НАГАДУВАНЬ';
     }
-    return `НАСТУПНЕ НАГАДУВАННЯ · ${pending[0]}`;
+
+    const upcoming = pending.find((t) => this.toMinutes(t) >= nowMin);
+    if (upcoming) {
+      return `НАСТУПНЕ НАГАДУВАННЯ · ${upcoming}`;
+    }
+    return `ОЧІКУЮТЬ ВІДМІТКИ · ${pending.length}`;
   });
 
   async onToggleCheckIn(habit: Habit): Promise<void> {
     this.busyHabitId.set(habit.idHabit);
+    this.errorMsg.set('');
     try {
-      await this.habitService.toggleCheckIn(habit, this.today);
+      await this.habitService.toggleCheckIn(habit, this.todayDate(), this.userTimeZone());
+    } catch (e: unknown) {
+      this.errorMsg.set(e instanceof Error ? e.message : 'Не вдалося оновити відмітку');
     } finally {
       this.busyHabitId.set(null);
     }
+  }
+
+  async onRestore(habit: Habit): Promise<void> {
+    this.busyHabitId.set(habit.idHabit);
+    this.errorMsg.set('');
+    try {
+      await this.habitService.restoreHabit(habit.idHabit);
+    } catch (e: unknown) {
+      this.errorMsg.set(e instanceof Error ? e.message : 'Не вдалося відновити звичку');
+    } finally {
+      this.busyHabitId.set(null);
+    }
+  }
+
+  async onConfirmYesterday(habit: Habit): Promise<void> {
+    this.busyHabitId.set(habit.idHabit);
+    this.errorMsg.set('');
+    try {
+      await this.habitService.toggleCheckIn(habit, this.yesterdayDate(), this.userTimeZone());
+    } catch (e: unknown) {
+      this.errorMsg.set(e instanceof Error ? e.message : 'Не вдалося зберегти відмітку за вчора');
+    } finally {
+      this.busyHabitId.set(null);
+    }
+  }
+
+  onDismissYesterday(habit: Habit): void {
+    const uid = this.auth.currentUser()?.idUser;
+    if (!uid) return;
+    const next = new Set(this.dismissedYesterdayIds());
+    next.add(habit.idHabit);
+    try {
+      localStorage.setItem(this.yesterdayStorageKey(uid, this.todayStr()), JSON.stringify([...next]));
+    } catch {}
+    this.yesterdayDismissRev.update((v) => v + 1);
   }
 
   openNewModal(): void {
@@ -306,23 +548,111 @@ export class DashboardComponent {
     this.editingHabit.set(null);
   }
 
-  private buildLast7Days(habit: Habit, completedDates: Set<string>): DayStatus[] {
+  private buildRowVm(habit: Habit): HabitRowVm {
+    const habitLogs = this.logs().filter((l) => l.idHabit === habit.idHabit);
+    const completedDates = new Set(habitLogs.map((l) => l.targetDate));
+    const scheduledToday =
+      habit.frequencyType === 'daily' || habit.targetDays.includes(this.todayIsoWeekday());
+    const completedToday = completedDates.has(this.todayStr());
+    const isOverdue =
+      habit.isActive &&
+      scheduledToday &&
+      !completedToday &&
+      this.nowMinutes() > this.toMinutes(habit.reminderTime);
+
+    const createdDateStr = getHabitCreatedDateStr(habit.createdAt, this.userTimeZone());
+    const last7Days = this.buildLast7Days(habit, completedDates, createdDateStr);
+    const streak = this.habitService.calculateStreak(habit, completedDates, this.todayDate());
+    const pendingRec = this.pendingRecByHabit().get(habit.idHabit);
+    const isAdapted = !pendingRec && this.adaptedHabitIds().has(habit.idHabit);
+    const isNewHabit =
+      !pendingRec && !isAdapted && this.isWithinColdStartDays(createdDateStr, 7);
+    const riskScore = pendingRec
+      ? pendingRec.riskScore
+      : isAdapted || isNewHabit
+        ? 0
+        : this.mlService.runLocalFallback(habit, habitLogs).riskScore;
+    const riskPercent = Math.round(riskScore * 100);
+
+    return {
+      habit,
+      scheduledToday,
+      completedToday,
+      isOverdue,
+      daysLabel: this.formatDaysLabel(habit),
+      streak,
+      last7Days,
+      riskPercent,
+      isRisky: Boolean(pendingRec) || (!isAdapted && !isNewHabit && riskScore >= 0.4),
+      isAdapted,
+      isNewHabit,
+    };
+  }
+
+  private isWithinColdStartDays(createdDateStr: string | null, minDays: number): boolean {
+    if (!createdDateStr) return false;
+    const [y, m, d] = createdDateStr.split('-').map(Number);
+    const createdLocal = new Date(y, m - 1, d);
+    const diffDays =
+      Math.floor((this.todayDate().getTime() - createdLocal.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    return diffDays < minDays;
+  }
+
+  private formatDaysLabel(habit: Habit): string {
+    if (habit.frequencyType === 'daily' || habit.targetDays.length === 7) return 'Пн–Нд';
+    const sorted = [...habit.targetDays].sort((a, b) => a - b);
+    if (sorted.length === 5 && sorted.join(',') === '1,2,3,4,5') return 'Пн–Пт';
+    return sorted.map((d) => UK_SHORT_DAYS[d] ?? String(d)).join(', ');
+  }
+
+  private buildLast7Days(
+    habit: Habit,
+    completedDates: Set<string>,
+    createdDateStr: string | null
+  ): DayStatus[] {
+    const base = this.todayDate();
     const result: DayStatus[] = [];
     for (let offset = 6; offset >= 0; offset--) {
-      const d = new Date(this.today);
-      d.setDate(this.today.getDate() - offset);
+      const d = new Date(base);
+      d.setDate(base.getDate() - offset);
       const dateStr = this.habitService.formatDate(d);
       const isoDay = d.getDay() === 0 ? 7 : d.getDay();
       const isScheduled = habit.frequencyType === 'daily' || habit.targetDays.includes(isoDay);
+      const beforeCreation = createdDateStr !== null && dateStr < createdDateStr;
 
       if (completedDates.has(dateStr)) {
         result.push('done');
-      } else if (offset === 0 || !isScheduled) {
+      } else if (offset === 0 || !isScheduled || beforeCreation) {
         result.push('neutral');
       } else {
         result.push('missed');
       }
     }
     return result;
+  }
+
+  private yesterdayStorageKey(uid: string, dateKey: string): string {
+    return `hf_yesterday_dismissed_${uid}_${dateKey}`;
+  }
+
+  private loadDismissedYesterday(uid: string, dateKey: string): Set<string> {
+    try {
+      const raw = localStorage.getItem(this.yesterdayStorageKey(uid, dateKey));
+      if (!raw) return new Set();
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? new Set(parsed.map(String)) : new Set();
+    } catch {
+      return new Set();
+    }
+  }
+
+  private nowMinutes(): number {
+    const p = this.todayParts();
+    return p.hours * 60 + p.minutes;
+  }
+
+  private toMinutes(timeStr: string): number {
+    const [h, m] = timeStr.split(':').map(Number);
+    return h * 60 + m;
   }
 }

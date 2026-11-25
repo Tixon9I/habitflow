@@ -68,6 +68,32 @@ export function getZonedDateParts(date: Date, timeZone?: string | null): ZonedDa
   return { year, month, day, hours, minutes, weekday, isoWeekday, dateStr };
 }
 
+export function formatIsoDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function getZonedTodayDate(timeZone?: string | null): Date {
+  const p = getZonedDateParts(new Date(), timeZone);
+  return new Date(p.year, p.month - 1, p.day);
+}
+
+export function getHabitCreatedDateStr(
+  createdAt?: { toDate?: () => Date } | null,
+  timeZone?: string | null
+): string | null {
+  if (!createdAt || typeof createdAt.toDate !== 'function') {
+    return null;
+  }
+  const d = createdAt.toDate();
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) {
+    return null;
+  }
+  return getZonedDateParts(d, timeZone).dateStr;
+}
+
 export function getTimeZoneOptions(currentTz?: string | null): TimeZoneOption[] {
   const resolved = resolveTimeZone(currentTz);
   if (SUPPORTED_TIMEZONES.some((o) => o.value === resolved)) {

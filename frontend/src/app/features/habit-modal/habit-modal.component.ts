@@ -1,15 +1,26 @@
-import { Component, inject, input, output, signal, OnInit } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import { ReactiveFormsModule, FormBuilder, Validators } from '@angular/forms';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  inject,
+  input,
+  output,
+  signal,
+  computed,
+  OnInit,
+} from '@angular/core';
+import { ReactiveFormsModule, FormBuilder, Validators, AbstractControl } from '@angular/forms';
 import { HabitService } from '../../core/services/habit.service';
 import { AuthService } from '../../core/services/auth.service';
 import { ConfirmDialogService } from '../../core/services/confirm-dialog.service';
 import { Habit, FrequencyType } from '../../core/models/habit.model';
 
+const DEFAULT_CATEGORIES = ['Навчання', "Здоров'я", 'Спорт', 'Продуктивність'];
+
 @Component({
   selector: 'app-habit-modal',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ReactiveFormsModule],
   template: `
     <div class="modal-overlay" (click)="close.emit()">
       <div class="modal" (click)="$event.stopPropagation()">
@@ -50,12 +61,50 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
           <div class="form-group">
             <label for="category">Категорія</label>
             <select id="category" class="form-control" formControlName="category">
-              <option value="Навчання">Навчання</option>
-              <option value="Здоров'я">Здоров'я</option>
-              <option value="Спорт">Спорт</option>
-              <option value="Продуктивність">Продуктивність</option>
+              @for (cat of allCategories(); track cat) {
+                <option [value]="cat">{{ cat }}</option>
+              }
               <option value="Інше">Інше</option>
             </select>
+
+            @if (form.controls.category.value === 'Інше') {
+              <div class="custom-cat-row">
+                <input
+                  #customCatInput
+                  class="form-control"
+                  type="text"
+                  [value]="customCategoryInput()"
+                  (input)="customCategoryInput.set(customCatInput.value)"
+                  placeholder="Введіть власну категорію"
+                />
+                <button
+                  type="button"
+                  class="btn btn--secondary btn--sm"
+                  [disabled]="customCategoryInput().trim().length < 2"
+                  (click)="addCustomCategory()"
+                >
+                  Додати
+                </button>
+              </div>
+            }
+
+            @if (customCategories().length > 0) {
+              <div class="custom-cat-chips">
+                @for (cat of customCategories(); track cat) {
+                  <span class="cat-chip">
+                    <span>{{ cat }}</span>
+                    <button
+                      type="button"
+                      class="cat-chip__remove"
+                      (click)="removeCustomCategory(cat)"
+                      [attr.aria-label]="'Видалити категорію ' + cat"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                }
+              </div>
+            }
           </div>
 
           <div class="form-group">
@@ -64,7 +113,7 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
               <button
                 type="button"
                 class="segmented__btn"
-                [class.active]="form.get('frequencyType')?.value === 'daily'"
+                [class.active]="form.controls.frequencyType.value === 'daily'"
                 (click)="setFrequency('daily')"
               >
                 Щодня
@@ -72,7 +121,7 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
               <button
                 type="button"
                 class="segmented__btn"
-                [class.active]="form.get('frequencyType')?.value === 'custom'"
+                [class.active]="form.controls.frequencyType.value === 'custom'"
                 (click)="setFrequency('custom')"
               >
                 Вибрані дні
@@ -80,7 +129,7 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
             </div>
           </div>
 
-          @if (form.get('frequencyType')?.value === 'custom') {
+          @if (form.controls.frequencyType.value === 'custom') {
             <div class="days-row">
               @for (d of weekdays; track d.day) {
                 <button
@@ -147,6 +196,46 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
     </div>
   `,
   styles: [`
+    .custom-cat-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+      align-items: center;
+    }
+
+    .custom-cat-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-top: 0.5rem;
+    }
+
+    .cat-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      background: var(--surface-subtle);
+      border: 1px solid var(--border);
+      font-size: 0.75rem;
+      color: var(--ink-secondary);
+
+      &__remove {
+        background: none;
+        border: none;
+        padding: 0;
+        color: var(--ink-faint);
+        font-size: 0.7rem;
+        cursor: pointer;
+        line-height: 1;
+
+        &:hover {
+          color: var(--red);
+        }
+      }
+    }
+
     .days-row {
       display: grid;
       grid-template-columns: repeat(7, 1fr);
@@ -167,14 +256,14 @@ import { Habit, FrequencyType } from '../../core/models/habit.model';
       transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 
       &:hover:not(.day-chip--active) {
-        border-color: #D4D4D0;
+        border-color: var(--border-strong);
         color: var(--ink);
       }
 
       &--active {
-        background: var(--ink);
-        border-color: var(--ink);
-        color: #FFFFFF;
+        background: var(--btn-primary-bg);
+        border-color: var(--btn-primary-bg);
+        color: var(--btn-primary-text);
         font-weight: 600;
       }
     }
@@ -203,6 +292,17 @@ export class HabitModalComponent implements OnInit {
   readonly loading = signal(false);
   readonly errorMsg = signal('');
   readonly selectedDays = signal<number[]>([1, 2, 3, 4, 5, 6, 7]);
+  readonly customCategories = signal<string[]>([]);
+  readonly customCategoryInput = signal('');
+
+  readonly allCategories = computed(() => {
+    const merged = [...DEFAULT_CATEGORIES, ...this.customCategories()];
+    const currentCat = this.habit()?.category;
+    if (currentCat && currentCat !== 'Інше' && !merged.includes(currentCat)) {
+      merged.push(currentCat);
+    }
+    return merged;
+  });
 
   readonly weekdays = [
     { day: 1, label: 'Пн' },
@@ -215,13 +315,21 @@ export class HabitModalComponent implements OnInit {
   ];
 
   readonly form = this.fb.nonNullable.group({
-    title: ['', [Validators.required, Validators.minLength(2)]],
+    title: [
+      '',
+      [
+        Validators.required,
+        (ctrl: AbstractControl) =>
+          String(ctrl.value ?? '').trim().length >= 2 ? null : { minlength: true },
+      ],
+    ],
     category: ['Навчання', [Validators.required]],
     frequencyType: ['daily' as FrequencyType, [Validators.required]],
     reminderTime: ['20:00', [Validators.required, Validators.pattern(/^([01]\d|2[0-3]):[0-5]\d$/)]],
   });
 
   ngOnInit(): void {
+    this.customCategories.set(this.loadCustomCategories());
     const current = this.habit();
     if (current) {
       this.form.patchValue({
@@ -234,12 +342,33 @@ export class HabitModalComponent implements OnInit {
     }
   }
 
+  addCustomCategory(): void {
+    const clean = this.customCategoryInput().trim();
+    if (clean.length < 2) return;
+
+    if (!DEFAULT_CATEGORIES.includes(clean) && !this.customCategories().includes(clean)) {
+      const updated = [...this.customCategories(), clean];
+      this.customCategories.set(updated);
+      this.saveCustomCategories(updated);
+    }
+
+    this.form.controls.category.setValue(clean);
+    this.customCategoryInput.set('');
+  }
+
+  removeCustomCategory(cat: string): void {
+    const updated = this.customCategories().filter((c) => c !== cat);
+    this.customCategories.set(updated);
+    this.saveCustomCategories(updated);
+    if (this.form.controls.category.value === cat) {
+      this.form.controls.category.setValue(DEFAULT_CATEGORIES[0]);
+    }
+  }
+
   setFrequency(type: FrequencyType): void {
     this.form.controls.frequencyType.setValue(type);
     if (type === 'daily') {
       this.selectedDays.set([1, 2, 3, 4, 5, 6, 7]);
-    } else if (this.selectedDays().length === 7) {
-      this.selectedDays.set([1, 2, 3, 4, 5]);
     }
   }
 
@@ -263,6 +392,15 @@ export class HabitModalComponent implements OnInit {
     const user = this.authService.currentUser();
     if (!user) return;
 
+    let finalCategory = this.form.controls.category.value;
+    if (finalCategory === 'Інше') {
+      const typed = this.customCategoryInput().trim();
+      if (typed.length >= 2) {
+        this.addCustomCategory();
+        finalCategory = typed;
+      }
+    }
+
     this.loading.set(true);
     this.errorMsg.set('');
 
@@ -273,10 +411,10 @@ export class HabitModalComponent implements OnInit {
       const existing = this.habit();
       if (existing) {
         const nextTitle = formVal.title.trim();
-        if (existing.title !== nextTitle || existing.category !== formVal.category) {
+        if (existing.title !== nextTitle || existing.category !== finalCategory) {
           await this.habitService.updateHabitDetails(existing.idHabit, {
             title: nextTitle,
-            category: formVal.category,
+            category: finalCategory,
           });
         }
 
@@ -293,7 +431,7 @@ export class HabitModalComponent implements OnInit {
         await this.habitService.createHabit({
           idUser: user.idUser,
           title: formVal.title.trim(),
-          category: formVal.category,
+          category: finalCategory,
           frequencyType: days.length === 7 ? 'daily' : 'custom',
           targetDays: days,
           reminderTime: formVal.reminderTime,
@@ -315,7 +453,7 @@ export class HabitModalComponent implements OnInit {
 
     this.loading.set(true);
     try {
-      await this.habitService.archiveHabit(existing.idHabit);
+      await this.habitService.archiveHabit(existing.idHabit, existing.idUser);
       this.close.emit();
     } catch (e: unknown) {
       this.errorMsg.set(e instanceof Error ? e.message : 'Помилка архівації');
@@ -331,7 +469,7 @@ export class HabitModalComponent implements OnInit {
     const confirmed = await this.confirmDialog.open({
       eyebrow: 'ЗВИЧКА · ВИДАЛЕННЯ',
       title: 'Видалити звичку?',
-      message: `Звичку «${existing.title}» буде видалено назавжди. Цю дію неможливо скасувати.`,
+      message: `Звичку «${existing.title}» та її історію відміток буде видалено назавжди. Цю дію неможливо скасувати.`,
       confirmLabel: 'Видалити',
       cancelLabel: 'Скасувати',
       danger: true,
@@ -340,12 +478,34 @@ export class HabitModalComponent implements OnInit {
 
     this.loading.set(true);
     try {
-      await this.habitService.deleteHabit(existing.idHabit);
+      await this.habitService.deleteHabit(existing.idHabit, existing.idUser);
       this.close.emit();
     } catch (e: unknown) {
       this.errorMsg.set(e instanceof Error ? e.message : 'Помилка видалення');
     } finally {
       this.loading.set(false);
     }
+  }
+
+  private storageKey(): string {
+    const uid = this.authService.currentUser()?.idUser ?? 'guest';
+    return `hf_custom_categories_${uid}`;
+  }
+
+  private loadCustomCategories(): string[] {
+    try {
+      const raw = localStorage.getItem(this.storageKey());
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private saveCustomCategories(list: string[]): void {
+    try {
+      localStorage.setItem(this.storageKey(), JSON.stringify(list));
+    } catch {}
   }
 }

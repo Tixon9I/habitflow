@@ -5,6 +5,7 @@ import {
   collectionData,
   doc,
   addDoc,
+  getDoc,
   getDocs,
   updateDoc,
   deleteDoc,
@@ -14,32 +15,52 @@ import {
   serverTimestamp,
   Timestamp,
 } from '@angular/fire/firestore';
-import { Observable } from 'rxjs';
+import { Observable, map, shareReplay } from 'rxjs';
 import { Habit, HabitLog, ScheduleHistoryEntry } from '../models/habit.model';
-
-interface DemoHabitTemplate {
-  title: string;
-  category: string;
-  reminderTime: string;
-  currentStreak: number;
-  bestStreak: number;
-  pattern: 'stable' | 'late_checkin' | 'weekend_drop' | 'moderate';
-}
+import { formatIsoDate, getZonedDateParts, getZonedTodayDate } from '../utils/date-time.util';
+import { buildDemoHabitBundle, prepareDemoLocalState } from '../utils/demo-seed.util';
 
 @Injectable({ providedIn: 'root' })
 export class HabitService {
   private readonly fs = inject(Firestore);
+  private readonly habitsCache = new Map<string, Observable<Habit[]>>();
+  private readonly logsCache = new Map<string, Observable<HabitLog[]>>();
+
+  clearCache(): void {
+    this.habitsCache.clear();
+    this.logsCache.clear();
+  }
 
   getHabits(userId: string): Observable<Habit[]> {
-    const ref = collection(this.fs, 'habits');
-    const q = query(ref, where('idUser', '==', userId), where('isActive', '==', true));
-    return collectionData(q, { idField: 'idHabit' }) as Observable<Habit[]>;
+    return this.getAllHabits(userId).pipe(
+      map((list) => list.filter((h) => h.isActive))
+    );
+  }
+
+  getAllHabits(userId: string): Observable<Habit[]> {
+    let stream = this.habitsCache.get(userId);
+    if (!stream) {
+      const ref = collection(this.fs, 'habits');
+      const q = query(ref, where('idUser', '==', userId));
+      stream = (collectionData(q, { idField: 'idHabit' }) as Observable<Habit[]>).pipe(
+        shareReplay(1)
+      );
+      this.habitsCache.set(userId, stream);
+    }
+    return stream;
   }
 
   getLogsByUser(userId: string): Observable<HabitLog[]> {
-    const ref = collection(this.fs, 'habit_logs');
-    const q = query(ref, where('idUser', '==', userId));
-    return collectionData(q, { idField: 'idLog' }) as Observable<HabitLog[]>;
+    let stream = this.logsCache.get(userId);
+    if (!stream) {
+      const ref = collection(this.fs, 'habit_logs');
+      const q = query(ref, where('idUser', '==', userId));
+      stream = (collectionData(q, { idField: 'idLog' }) as Observable<HabitLog[]>).pipe(
+        shareReplay(1)
+      );
+      this.logsCache.set(userId, stream);
+    }
+    return stream;
   }
 
   async createHabit(
@@ -72,7 +93,12 @@ export class HabitService {
     await updateDoc(habitRef, patch);
   }
 
-  async updateHabitSchedule(habit: Habit, newTime: string, newDays: number[]): Promise<void> {
+  async updateHabitSchedule(
+    habit: Habit,
+    newTime: string,
+    newDays: number[],
+    clearPendingRecommendations = true
+  ): Promise<void> {
     const habitRef = doc(this.fs, 'habits', habit.idHabit);
     const historyItem: ScheduleHistoryEntry = {
       changedAt: Timestamp.now(),
@@ -86,55 +112,166 @@ export class HabitService {
       frequencyType: newDays.length === 7 ? 'daily' : 'custom',
       scheduleHistory: [...(habit.scheduleHistory ?? []), historyItem],
     });
+
+    if (clearPendingRecommendations) {
+      await this.clearPendingRecommendationsForHabit(habit.idUser, habit.idHabit);
+    }
   }
 
-  archiveHabit(habitId: string): Promise<void> {
-    return updateDoc(doc(this.fs, 'habits', habitId), { isActive: false });
+  async archiveHabit(habitId: string, userId?: string): Promise<void> {
+    const resolvedUserId = userId ?? (await this.resolveHabitOwner(habitId));
+    await updateDoc(doc(this.fs, 'habits', habitId), { isActive: false });
+    if (resolvedUserId) {
+      await this.clearPendingRecommendationsForHabit(resolvedUserId, habitId);
+    }
   }
 
-  deleteHabit(habitId: string): Promise<void> {
-    return deleteDoc(doc(this.fs, 'habits', habitId));
+  restoreHabit(habitId: string): Promise<void> {
+    return updateDoc(doc(this.fs, 'habits', habitId), { isActive: true });
   }
 
-  async toggleCheckIn(habit: Habit, date: Date): Promise<void> {
-    const targetDate = this.formatDate(date);
-    const logsRef = collection(this.fs, 'habit_logs');
-    const q = query(
-      logsRef,
-      where('idHabit', '==', habit.idHabit),
-      where('targetDate', '==', targetDate)
+  async deleteHabit(habitId: string, userId?: string): Promise<void> {
+    const resolvedUserId = userId ?? (await this.resolveHabitOwner(habitId));
+    const refsToDelete = [doc(this.fs, 'habits', habitId)];
+
+    if (resolvedUserId) {
+      for (const colName of ['habit_logs', 'recommendations']) {
+        const snap = await getDocs(
+          query(collection(this.fs, colName), where('idUser', '==', resolvedUserId))
+        );
+        for (const d of snap.docs) {
+          if (d.data()['idHabit'] === habitId) {
+            refsToDelete.push(d.ref);
+          }
+        }
+      }
+    }
+
+    const chunkSize = 400;
+    for (let i = 0; i < refsToDelete.length; i += chunkSize) {
+      const batch = writeBatch(this.fs);
+      for (const ref of refsToDelete.slice(i, i + chunkSize)) {
+        batch.delete(ref);
+      }
+      await batch.commit();
+    }
+  }
+
+  private async resolveHabitOwner(habitId: string): Promise<string | null> {
+    const snap = await getDoc(doc(this.fs, 'habits', habitId));
+    if (!snap.exists()) return null;
+    const owner = snap.data()['idUser'];
+    return typeof owner === 'string' ? owner : null;
+  }
+
+  private async clearPendingRecommendationsForHabit(
+    userId: string,
+    habitId: string
+  ): Promise<void> {
+    const snap = await getDocs(
+      query(collection(this.fs, 'recommendations'), where('idUser', '==', userId))
     );
-    const snap = await getDocs(q);
+    const batch = writeBatch(this.fs);
+    let hasDeletes = false;
+
+    for (const d of snap.docs) {
+      const data = d.data();
+      if (data['idHabit'] === habitId && data['status'] === 'pending') {
+        batch.delete(d.ref);
+        hasDeletes = true;
+      }
+    }
+
+    if (hasDeletes) {
+      await batch.commit();
+    }
+  }
+
+  async toggleCheckIn(habit: Habit, date: Date, timeZone?: string): Promise<void> {
+    const targetDate = this.formatDate(date);
+    const todayStr = getZonedDateParts(new Date(), timeZone).dateStr;
+    const logsRef = collection(this.fs, 'habit_logs');
+    const snap = await getDocs(query(logsRef, where('idUser', '==', habit.idUser)));
+
+    const habitDates = new Set<string>();
+    let existingDocRef = null;
+
+    for (const d of snap.docs) {
+      const data = d.data();
+      if (data['idHabit'] === habit.idHabit) {
+        const logDate = String(data['targetDate'] ?? '');
+        if (logDate) habitDates.add(logDate);
+        if (logDate === targetDate) {
+          existingDocRef = d.ref;
+        }
+      }
+    }
 
     const habitRef = doc(this.fs, 'habits', habit.idHabit);
 
-    if (!snap.empty) {
-      const logId = snap.docs[0].id;
-      await deleteDoc(doc(this.fs, 'habit_logs', logId));
-
-      const newStreak = Math.max(0, habit.currentStreak - 1);
-      await updateDoc(habitRef, { currentStreak: newStreak });
+    if (existingDocRef) {
+      await deleteDoc(existingDocRef);
+      habitDates.delete(targetDate);
     } else {
-      const now = new Date();
-      const delayMinutes = this.calculateDelayMinutes(now, habit.reminderTime);
+      const isToday = targetDate === todayStr;
+      let completedAt: Timestamp;
+      let delayMinutes: number;
 
-      const logPayload = {
+      if (isToday) {
+        const now = new Date();
+        completedAt = Timestamp.now();
+        delayMinutes = this.calculateDelayMinutes(now, habit.reminderTime, timeZone);
+      } else {
+        const [hours, minutes] = habit.reminderTime.split(':').map(Number);
+        const planned = new Date(date);
+        planned.setHours(hours, minutes, 0, 0);
+        completedAt = Timestamp.fromDate(planned);
+        delayMinutes = 0;
+      }
+
+      await addDoc(logsRef, {
         idHabit: habit.idHabit,
         idUser: habit.idUser,
         targetDate,
-        completedAt: Timestamp.now(),
+        completedAt,
         plannedTime: habit.reminderTime,
         delayMinutes,
-      };
-      await addDoc(logsRef, logPayload);
-
-      const nextStreak = habit.currentStreak + 1;
-      const bestStreak = Math.max(habit.bestStreak, nextStreak);
-      await updateDoc(habitRef, {
-        currentStreak: nextStreak,
-        bestStreak,
       });
+      habitDates.add(targetDate);
     }
+
+    const zonedToday = getZonedTodayDate(timeZone);
+    const currentStreak = this.calculateStreak(habit, habitDates, zonedToday);
+    const bestStreak = Math.max(habit.bestStreak, currentStreak);
+    await updateDoc(habitRef, {
+      currentStreak,
+      bestStreak,
+    });
+  }
+
+  calculateStreak(habit: Habit, completedDates: Set<string>, referenceDate: Date): number {
+    let streak = 0;
+    for (let offset = 0; offset < 365; offset++) {
+      const d = new Date(referenceDate);
+      d.setDate(referenceDate.getDate() - offset);
+      const isoDay = d.getDay() === 0 ? 7 : d.getDay();
+      const isScheduled =
+        habit.frequencyType === 'daily' || habit.targetDays.includes(isoDay);
+
+      if (!isScheduled) {
+        continue;
+      }
+
+      const dateStr = this.formatDate(d);
+      if (completedDates.has(dateStr)) {
+        streak++;
+      } else if (offset === 0) {
+        continue;
+      } else {
+        break;
+      }
+    }
+    return streak;
   }
 
   getLogsByHabit(habitId: string): Observable<HabitLog[]> {
@@ -145,143 +282,60 @@ export class HabitService {
 
   async seedDemoHistory(userId: string): Promise<{ habits: Habit[]; logs: HabitLog[] }> {
     await this.clearUserData(userId);
+    prepareDemoLocalState(userId);
 
-    const templates: DemoHabitTemplate[] = [
-      {
-        title: 'Читання фахової літератури',
-        category: 'Навчання',
-        reminderTime: '20:00',
-        currentStreak: 12,
-        bestStreak: 16,
-        pattern: 'stable',
-      },
-      {
-        title: 'Ранкова пробіжка',
-        category: 'Спорт',
-        reminderTime: '07:30',
-        currentStreak: 4,
-        bestStreak: 9,
-        pattern: 'late_checkin',
-      },
-      {
-        title: 'Практика англійської',
-        category: 'Навчання',
-        reminderTime: '19:00',
-        currentStreak: 5,
-        bestStreak: 10,
-        pattern: 'weekend_drop',
-      },
-      {
-        title: 'Алгоритмічні задачі',
-        category: 'Навчання',
-        reminderTime: '18:30',
-        currentStreak: 6,
-        bestStreak: 11,
-        pattern: 'moderate',
-      },
-      {
-        title: 'Вітаміни',
-        category: "Здоров'я",
-        reminderTime: '09:00',
-        currentStreak: 21,
-        bestStreak: 21,
-        pattern: 'stable',
-      },
-    ];
+    const { habits, logs } = buildDemoHabitBundle(
+      userId,
+      new Date(),
+      (kind) => doc(collection(this.fs, kind)).id,
+      (h, dates, refDate) => this.calculateStreak(h, dates, refDate)
+    );
 
-    const batch = writeBatch(this.fs);
-    const today = new Date();
-    const createdDate = new Date(today);
-    createdDate.setDate(today.getDate() - 30);
-    const createdTimestamp = Timestamp.fromDate(createdDate);
+    const writeOps: Array<{ ref: ReturnType<typeof doc>; data: Record<string, unknown> }> = [];
 
-    const createdHabits: Habit[] = [];
-    const createdLogs: HabitLog[] = [];
-
-    for (let hIdx = 0; hIdx < templates.length; hIdx++) {
-      const tpl = templates[hIdx];
-      const habitRef = doc(collection(this.fs, 'habits'));
-      const initialHistory: ScheduleHistoryEntry = {
-        changedAt: createdTimestamp,
-        oldTime: tpl.reminderTime,
-        oldDays: [1, 2, 3, 4, 5, 6, 7],
-      };
-
-      const habitDoc: Habit = {
-        idHabit: habitRef.id,
-        idUser: userId,
-        title: tpl.title,
-        category: tpl.category,
-        frequencyType: 'daily',
-        targetDays: [1, 2, 3, 4, 5, 6, 7],
-        reminderTime: tpl.reminderTime,
-        scheduleHistory: [initialHistory],
-        currentStreak: tpl.currentStreak,
-        bestStreak: tpl.bestStreak,
-        isActive: true,
-        createdAt: createdTimestamp,
-      };
-      createdHabits.push(habitDoc);
-
-      batch.set(habitRef, {
-        idUser: habitDoc.idUser,
-        title: habitDoc.title,
-        category: habitDoc.category,
-        frequencyType: habitDoc.frequencyType,
-        targetDays: habitDoc.targetDays,
-        reminderTime: habitDoc.reminderTime,
-        scheduleHistory: habitDoc.scheduleHistory,
-        currentStreak: habitDoc.currentStreak,
-        bestStreak: habitDoc.bestStreak,
-        isActive: habitDoc.isActive,
-        createdAt: habitDoc.createdAt,
+    for (const habitDoc of habits) {
+      writeOps.push({
+        ref: doc(this.fs, 'habits', habitDoc.idHabit),
+        data: {
+          idUser: habitDoc.idUser,
+          title: habitDoc.title,
+          category: habitDoc.category,
+          frequencyType: habitDoc.frequencyType,
+          targetDays: habitDoc.targetDays,
+          reminderTime: habitDoc.reminderTime,
+          scheduleHistory: habitDoc.scheduleHistory,
+          currentStreak: habitDoc.currentStreak,
+          bestStreak: habitDoc.bestStreak,
+          isActive: habitDoc.isActive,
+          createdAt: habitDoc.createdAt,
+        },
       });
-
-      const [plannedH, plannedM] = tpl.reminderTime.split(':').map(Number);
-
-      for (let offset = 1; offset <= 30; offset++) {
-        const d = new Date(today);
-        d.setDate(today.getDate() - offset);
-        const isoDay = d.getDay() === 0 ? 7 : d.getDay();
-        const isWeekend = isoDay === 6 || isoDay === 7;
-        const seed = (hIdx * 31 + offset * 17) % 100;
-
-        if (!this.shouldSeedDay(tpl.pattern, isWeekend, seed, offset)) {
-          continue;
-        }
-
-        const delayMinutes = this.computeDemoDelay(tpl.pattern, seed);
-        const completedDate = new Date(d);
-        const totalMins = Math.min(23 * 60 + 45, plannedH * 60 + plannedM + delayMinutes);
-        completedDate.setHours(Math.floor(totalMins / 60), totalMins % 60, 0, 0);
-
-        const logRef = doc(collection(this.fs, 'habit_logs'));
-        const completedTs = Timestamp.fromDate(completedDate);
-        const targetDate = this.formatDate(d);
-
-        createdLogs.push({
-          idLog: logRef.id,
-          idHabit: habitRef.id,
-          idUser: userId,
-          targetDate,
-          completedAt: completedTs,
-          plannedTime: tpl.reminderTime,
-          delayMinutes,
-        });
-
-        batch.set(logRef, {
-          idHabit: habitRef.id,
-          idUser: userId,
-          targetDate,
-          completedAt: completedTs,
-          plannedTime: tpl.reminderTime,
-          delayMinutes,
-        });
-      }
     }
 
-    await batch.commit();
-    return { habits: createdHabits, logs: createdLogs };
+    for (const logDoc of logs) {
+      writeOps.push({
+        ref: doc(this.fs, 'habit_logs', logDoc.idLog),
+        data: {
+          idHabit: logDoc.idHabit,
+          idUser: logDoc.idUser,
+          targetDate: logDoc.targetDate,
+          completedAt: logDoc.completedAt,
+          plannedTime: logDoc.plannedTime,
+          delayMinutes: logDoc.delayMinutes,
+        },
+      });
+    }
+
+    const chunkSize = 400;
+    for (let i = 0; i < writeOps.length; i += chunkSize) {
+      const batch = writeBatch(this.fs);
+      for (const item of writeOps.slice(i, i + chunkSize)) {
+        batch.set(item.ref, item.data);
+      }
+      await batch.commit();
+    }
+
+    return { habits, logs };
   }
 
   private async clearUserData(userId: string): Promise<void> {
@@ -308,49 +362,17 @@ export class HabitService {
   }
 
   formatDate(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return formatIsoDate(date);
   }
 
-  private shouldSeedDay(
-    pattern: DemoHabitTemplate['pattern'],
-    isWeekend: boolean,
-    seed: number,
-    offset: number
-  ): boolean {
-    if (pattern === 'stable') {
-      return seed >= 8;
-    }
-    if (pattern === 'late_checkin') {
-      if (offset <= 7) return seed >= 35;
-      return seed >= 28;
-    }
-    if (pattern === 'weekend_drop') {
-      if (isWeekend) return seed >= 88;
-      return seed >= 12;
-    }
-    return seed >= 22;
-  }
-
-  private computeDemoDelay(pattern: DemoHabitTemplate['pattern'], seed: number): number {
-    if (pattern === 'late_checkin') {
-      return 60 + (seed % 75);
-    }
-    if (pattern === 'moderate') {
-      return 5 + (seed % 25);
-    }
-    return seed % 12;
-  }
-
-  private calculateDelayMinutes(actualDate: Date, plannedTimeStr: string): number {
+  private calculateDelayMinutes(
+    actualDate: Date,
+    plannedTimeStr: string,
+    timeZone?: string
+  ): number {
     const [hours, minutes] = plannedTimeStr.split(':').map(Number);
-    const plannedDate = new Date(actualDate);
-    plannedDate.setHours(hours, minutes, 0, 0);
-
-    const diffMs = actualDate.getTime() - plannedDate.getTime();
-    const diffMinutes = Math.round(diffMs / 60000);
+    const zoned = getZonedDateParts(actualDate, timeZone);
+    const diffMinutes = zoned.hours * 60 + zoned.minutes - (hours * 60 + minutes);
     return Math.max(0, diffMinutes);
   }
 }
