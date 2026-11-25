@@ -41,6 +41,8 @@ class HabitRiskPredictorService:
 
         now_utc = datetime.now(timezone.utc)
 
+        scored_items: list[tuple] = []
+
         for habit in request.habits:
             if not habit.isActive:
                 continue
@@ -53,9 +55,12 @@ class HabitRiskPredictorService:
                 cold_start_habit_ids.append(habit.idHabit)
                 continue
 
+            habit_logs = [
+                log for log in request.habitLogs if log.idHabit == habit.idHabit
+            ]
             features = self.feature_extractor.extractFeatures(
                 habit=habit,
-                logs=request.habitLogs,
+                logs=habit_logs,
                 reference_date=request.referenceDate,
             )
             risk_score = self.risk_model.predictRiskScore(features)
@@ -65,24 +70,72 @@ class HabitRiskPredictorService:
                 reminder_time=habit.reminderTime,
                 features=features,
                 main_factor=main_factor,
+                logs=habit_logs,
             )
             suggested_frequency = self.risk_model.recommendNewFrequency(
                 habit=habit,
                 features=features,
                 main_factor=main_factor,
             )
-            explanation_text = self.explanation_service.generateAdviceText(
-                habit=habit,
-                features=features,
-                risk_score=risk_score,
-                risk_level=risk_level,
-                main_factor=main_factor,
-                suggested_time=suggested_time,
-                suggested_frequency=suggested_frequency,
-                ai_consent=request.aiConsent,
+            scored_items.append(
+                (
+                    habit,
+                    features,
+                    risk_score,
+                    risk_level,
+                    main_factor,
+                    suggested_time,
+                    suggested_frequency,
+                )
             )
-            if self.explanation_service.last_used_fallback:
-                used_fallback_any = True
+
+        scored_items.sort(key=lambda item: item[2], reverse=True)
+        llm_calls_made = 0
+
+        for (
+            habit,
+            features,
+            risk_score,
+            risk_level,
+            main_factor,
+            suggested_time,
+            suggested_frequency,
+        ) in scored_items:
+            needs_personalized_advice = (
+                llm_calls_made < request.notificationLimit
+                and (
+                    risk_score >= 0.40
+                    or suggested_time != habit.reminderTime
+                    or features.missRate7d >= 0.25
+                )
+            )
+
+            if needs_personalized_advice:
+                llm_calls_made += 1
+                explanation_text, used_fb = self.explanation_service.generateAdviceWithMeta(
+                    habit=habit,
+                    features=features,
+                    risk_score=risk_score,
+                    risk_level=risk_level,
+                    main_factor=main_factor,
+                    suggested_time=suggested_time,
+                    suggested_frequency=suggested_frequency,
+                    ai_consent=request.aiConsent,
+                )
+                if used_fb:
+                    used_fallback_any = True
+            else:
+                explanation_text = self.explanation_service.buildTemplateAdvice(
+                    habit_title=habit.title,
+                    risk_score=risk_score,
+                    risk_level=risk_level,
+                    main_factor=main_factor,
+                    current_time=habit.reminderTime,
+                    suggested_time=suggested_time,
+                    suggested_frequency=suggested_frequency,
+                )
+                if not request.aiConsent or not self.explanation_service.is_configured:
+                    used_fallback_any = True
 
             recommendations.append(
                 RecommendationDto(
@@ -100,7 +153,6 @@ class HabitRiskPredictorService:
                 )
             )
 
-        recommendations.sort(key=lambda rec: rec.riskScore, reverse=True)
         elapsed_ms = round((time.perf_counter() - started_at) * 1000.0, 2)
 
         return AnalyzeResponseDto(

@@ -10,7 +10,13 @@ from sklearn.metrics import f1_score, precision_score
 from sklearn.model_selection import train_test_split
 
 from app.config import settings
-from app.schemas.dto import FeatureVectorDto, HabitInputDto, MainFactor, RiskLevel
+from app.schemas.dto import (
+    FeatureVectorDto,
+    HabitInputDto,
+    HabitLogInputDto,
+    MainFactor,
+    RiskLevel,
+)
 
 
 FEATURE_NAMES = [
@@ -173,17 +179,26 @@ class RiskClassifierModel:
         reminder_time: str,
         features: FeatureVectorDto,
         main_factor: MainFactor,
+        logs: list[HabitLogInputDto] | None = None,
     ) -> str:
         hours_str, minutes_str = reminder_time.split(":")
         base_minutes = int(hours_str) * 60 + int(minutes_str)
 
         shift = 0
-        if main_factor == "late_checkin" or features.meanDelayMinutes >= 20.0:
-            rounded_delay = int(round(features.meanDelayMinutes / 15.0) * 15)
-            shift = max(15, min(180, rounded_delay))
-        elif features.meanDelayMinutes <= -20.0:
-            rounded_early = int(round(abs(features.meanDelayMinutes) / 15.0) * 15)
-            shift = -max(15, min(60, rounded_early))
+        if main_factor == "late_checkin":
+            late_delays = [
+                float(log.delayMinutes)
+                for log in (logs or [])
+                if float(log.delayMinutes) > 15.0
+            ]
+            basis_delay = (
+                float(np.median(late_delays))
+                if late_delays
+                else float(features.meanDelayMinutes)
+            )
+            if basis_delay > 15.0:
+                rounded_delay = int(round(basis_delay / 15.0) * 15)
+                shift = max(15, min(180, rounded_delay))
 
         adapted_minutes = max(6 * 60, min(23 * 60, base_minutes + shift))
         new_hours, new_mins = divmod(adapted_minutes, 60)
@@ -195,6 +210,7 @@ class RiskClassifierModel:
         features: FeatureVectorDto,
         main_factor: MainFactor,
     ) -> int:
+        days_count = 7 if habit.frequencyType == "daily" else len(habit.targetDays)
         if main_factor in ("weekend_drop", "low_regularity"):
-            return 5
-        return len(habit.targetDays)
+            return 5 if days_count > 5 else max(2, days_count - 2)
+        return days_count

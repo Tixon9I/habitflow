@@ -13,8 +13,6 @@ except ImportError:  # pragma: no cover - optional when running offline
 
 
 class AiExplanationService:
-    """Generates short Ukrainian habit advice via Gemini 2.5 Flash with 2s timeout fallback."""
-
     def __init__(
         self,
         api_key: str | None = None,
@@ -26,11 +24,15 @@ class AiExplanationService:
         self.timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else settings.gemini_timeout_seconds
         )
-        self.last_used_fallback: bool = False
         self._client = (
             genai.Client(api_key=self.api_key)
             if (genai is not None and self.api_key)
             else None
+        )
+        self._executor = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="gemini",
+            initializer=lambda: setattr(threading.current_thread(), "daemon", True),
         )
 
     @property
@@ -48,7 +50,7 @@ class AiExplanationService:
             raise ValueError("Empty response from Gemini API")
         return text
 
-    def generateAdviceText(
+    def generateAdviceWithMeta(
         self,
         habit: HabitInputDto,
         features: FeatureVectorDto,
@@ -58,8 +60,7 @@ class AiExplanationService:
         suggested_time: str,
         suggested_frequency: int,
         ai_consent: bool = True,
-    ) -> str:
-        """Generates personalized Ukrainian explanation via Gemini API with 2s fallback."""
+    ) -> tuple[str, bool]:
         fallback_text = self.buildTemplateAdvice(
             habit_title=habit.title,
             risk_score=risk_score,
@@ -71,8 +72,7 @@ class AiExplanationService:
         )
 
         if not ai_consent or self._client is None:
-            self.last_used_fallback = True
-            return fallback_text
+            return fallback_text, True
 
         prompt = (
             "Ти помічник вебзастосунку HabitFlow. Напиши коротку, доброзичливу й практичну "
@@ -87,19 +87,36 @@ class AiExplanationService:
             f"Рекомендований час: {suggested_time}, рекомендована частота: {suggested_frequency}."
         )
 
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gemini",
-                                      initializer=lambda: threading.current_thread().__setattr__("daemon", True))
-        future = executor.submit(self._call_gemini, prompt)
+        future = self._executor.submit(self._call_gemini, prompt)
         try:
             advice = future.result(timeout=self.timeout_seconds)
-            self.last_used_fallback = False
-            return advice
+            return advice, False
         except (FuturesTimeoutError, Exception):
             future.cancel()
-            self.last_used_fallback = True
-            return fallback_text
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            return fallback_text, True
+
+    def generateAdviceText(
+        self,
+        habit: HabitInputDto,
+        features: FeatureVectorDto,
+        risk_score: float,
+        risk_level: RiskLevel,
+        main_factor: MainFactor,
+        suggested_time: str,
+        suggested_frequency: int,
+        ai_consent: bool = True,
+    ) -> str:
+        text, _ = self.generateAdviceWithMeta(
+            habit=habit,
+            features=features,
+            risk_score=risk_score,
+            risk_level=risk_level,
+            main_factor=main_factor,
+            suggested_time=suggested_time,
+            suggested_frequency=suggested_frequency,
+            ai_consent=ai_consent,
+        )
+        return text
 
     @staticmethod
     def buildTemplateAdvice(
@@ -123,7 +140,7 @@ class AiExplanationService:
 
         if main_factor == "late_checkin":
             return (
-                f"Для звички «{habit_title}» зафіксовано систематичні запізнення чекінів "
+                f"Для звички «{habit_title}» зафіксовано систематичні запізнення відміток "
                 f"(ризик пропуску {risk_pct}%). Спробуйте перенести нагадування з {current_time} "
                 f"на {suggested_time}, щоб воно краще збігалося з реальним графіком."
             )
