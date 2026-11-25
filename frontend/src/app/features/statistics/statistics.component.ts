@@ -1,5 +1,4 @@
-import { Component, inject, signal, computed } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { ChangeDetectionStrategy, Component, inject, signal, computed } from '@angular/core';
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { of, switchMap } from 'rxjs';
 import { AuthService } from '../../core/services/auth.service';
@@ -10,6 +9,12 @@ import {
   CheckInScatterPoint,
 } from '../../core/services/statistics.service';
 import { Habit, HabitLog } from '../../core/models/habit.model';
+import {
+  formatIsoDate,
+  getZonedDateParts,
+  getZonedTodayDate,
+  resolveTimeZone,
+} from '../../core/utils/date-time.util';
 
 interface LogTableRow {
   idLog: string;
@@ -25,22 +30,46 @@ interface LogTableRow {
 @Component({
   selector: 'app-statistics',
   standalone: true,
-  imports: [CommonModule],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <main class="page stats-page">
+      <div class="stats-toolbar">
+        <div class="stats-filter">
+          <label for="habitFilter" class="eyebrow">ФІЛЬТР ЗВИЧКИ</label>
+          <select
+            #habitSelect
+            id="habitFilter"
+            class="form-control stats-select"
+            [value]="selectedHabitId()"
+            (change)="onHabitFilterChange(habitSelect.value)"
+          >
+            <option value="all">Усі звички ({{ habits().length }})</option>
+            @for (h of habits(); track h.idHabit) {
+              <option [value]="h.idHabit">{{ h.title }}</option>
+            }
+          </select>
+        </div>
+      </div>
+
       <section class="kpi-card card">
         <div class="kpi-grid">
           <div class="kpi-item">
             <span class="kpi-item__label">Загальна послідовність</span>
             <div class="kpi-item__value kpi-item__value--lg">{{ overallConsistency() }}%</div>
             <div class="kpi-item__sub">
-              <span class="trend-up">↗ {{ consistencyDeltaLabel() }}</span>
-              <span>порівняно з минулим місяцем</span>
+              @if (periodComparison().hasPrevious) {
+                <span [class.trend-up]="periodComparison().isPositive" [class.trend-down]="!periodComparison().isPositive">
+                  {{ periodComparison().arrow }} {{ periodComparison().label }}
+                </span>
+                <span>до попереднього періоду</span>
+              } @else {
+                <span>Перший період спостереження</span>
+              }
             </div>
           </div>
 
           <div class="kpi-item">
-            <span class="kpi-item__label">Відміток цього місяця</span>
+            <span class="kpi-item__label">Відміток за {{ selectedPeriod() }} дн.</span>
             <div class="kpi-item__value">{{ totalCheckIns30d() }}</div>
             <div class="kpi-item__sub">із {{ totalScheduled30d() }} запланованих</div>
           </div>
@@ -64,12 +93,12 @@ interface LogTableRow {
             <svg class="spark-svg" viewBox="0 0 180 54" preserveAspectRatio="none" aria-hidden="true">
               <defs>
                 <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="#166534" stop-opacity="0.16" />
-                  <stop offset="100%" stop-color="#166534" stop-opacity="0.01" />
+                  <stop offset="0%" stop-color="var(--green)" stop-opacity="0.18" />
+                  <stop offset="100%" stop-color="var(--green)" stop-opacity="0.01" />
                 </linearGradient>
               </defs>
               <path [attr.d]="sparklineAreaPath()" fill="url(#sparkFill)" />
-              <path [attr.d]="sparklineLinePath()" fill="none" stroke="#166534" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              <path [attr.d]="sparklineLinePath()" fill="none" stroke="var(--green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
             <span class="eyebrow">ДИНАМІКА ВИКОНАННЯ</span>
           </div>
@@ -80,13 +109,30 @@ interface LogTableRow {
         <article class="chart-card card">
           <div class="chart-card__head">
             <h3>Частота виконання за днями тижня (%)</h3>
-            <span class="chart-card__period">Останні 30 днів</span>
+            <div class="period-switch" role="group" aria-label="Період статистики">
+              @for (p of periods; track p) {
+                <button
+                  type="button"
+                  class="period-switch__btn"
+                  [class.active]="selectedPeriod() === p"
+                  (click)="selectedPeriod.set(p)"
+                >
+                  {{ p }} дн.
+                </button>
+              }
+            </div>
           </div>
 
           <div class="chart-card__stat">
             <span class="chart-card__big">{{ weeklyAverageRate() }}%</span>
-            <span class="trend-up">↗ {{ weeklyDeltaLabel() }}</span>
-            <span class="chart-card__muted">до попереднього періоду</span>
+            @if (periodComparison().hasPrevious) {
+              <span [class.trend-up]="periodComparison().isPositive" [class.trend-down]="!periodComparison().isPositive">
+                {{ periodComparison().arrow }} {{ periodComparison().label }}
+              </span>
+              <span class="chart-card__muted">до попереднього періоду</span>
+            } @else {
+              <span class="chart-card__muted">середнє за {{ selectedPeriod() }} дн.</span>
+            }
           </div>
 
           <div class="bar-chart">
@@ -100,13 +146,16 @@ interface LogTableRow {
 
             <div class="bar-chart__plot">
               @for (item of weeklyData(); track item.isoDay) {
-                <div class="bar-col">
-                  <span class="bar-col__pct mono">{{ item.rate }}%</span>
+                <div class="bar-col" [class.bar-col--unscheduled]="item.scheduled === 0">
+                  <span class="bar-col__pct mono">
+                    {{ item.scheduled === 0 ? '—' : item.rate + '%' }}
+                  </span>
                   <div class="bar-col__track">
                     <div
                       class="bar-col__fill"
-                      [class.bar-col__fill--muted]="item.isWeekend || item.rate < 50"
-                      [style.height.%]="item.rate"
+                      [class.bar-col__fill--unscheduled]="item.scheduled === 0"
+                      [class.bar-col__fill--muted]="item.scheduled > 0 && item.rate < 50"
+                      [style.height.%]="item.scheduled === 0 ? 12 : item.rate"
                     ></div>
                   </div>
                   <span class="bar-col__label">{{ item.day }}</span>
@@ -116,10 +165,18 @@ interface LogTableRow {
           </div>
 
           <div class="chart-card__foot">
-            <span class="legend-item">
-              <span class="legend-square"></span>
-              Виконані відмітки
-            </span>
+            <div class="legend-group">
+              <span class="legend-item">
+                <span class="legend-square"></span>
+                Виконані відмітки
+              </span>
+              @if (hasUnscheduledDays()) {
+                <span class="legend-item">
+                  <span class="legend-square legend-square--unscheduled"></span>
+                  Не заплановано
+                </span>
+              }
+            </div>
             <span class="chart-card__muted">
               Середнє за тиждень <strong class="mono">{{ weeklyAverageRounded() }}%</strong>
             </span>
@@ -128,7 +185,7 @@ interface LogTableRow {
 
         <article class="chart-card card">
           <div class="chart-card__head">
-            <h3>Розподіл фактичного часу чекінів</h3>
+            <h3>Розподіл фактичного часу відміток</h3>
             <span class="chart-card__period mono">06:00 – 23:00</span>
           </div>
 
@@ -148,16 +205,18 @@ interface LogTableRow {
 
             <div class="scatter-chart__body">
               <svg class="scatter-svg" viewBox="0 0 360 156" preserveAspectRatio="none">
-                <rect x="257" y="0" width="103" height="156" fill="#F5F4F0" />
-                <line x1="0" y1="39" x2="360" y2="39" stroke="#F0EFEA" stroke-width="1" />
-                <line x1="0" y1="78" x2="360" y2="78" stroke="#F0EFEA" stroke-width="1" />
-                <line x1="0" y1="117" x2="360" y2="117" stroke="#F0EFEA" stroke-width="1" />
+                @for (band of shadedDayBands(); track band.x) {
+                  <rect [attr.x]="band.x" y="0" [attr.width]="band.width" height="156" fill="var(--scatter-band)" />
+                }
+                <line x1="0" y1="39" x2="360" y2="39" stroke="var(--border-light)" stroke-width="1" />
+                <line x1="0" y1="78" x2="360" y2="78" stroke="var(--border-light)" stroke-width="1" />
+                <line x1="0" y1="117" x2="360" y2="117" stroke="var(--border-light)" stroke-width="1" />
                 <line
                   x1="0"
                   [attr.y1]="meanTimeLineY()"
                   x2="360"
                   [attr.y2]="meanTimeLineY()"
-                  stroke="#71717A"
+                  stroke="var(--ink-muted)"
                   stroke-width="1"
                   stroke-dasharray="3 3"
                 />
@@ -165,9 +224,9 @@ interface LogTableRow {
                   <circle
                     [attr.cx]="(pt.xPercent / 100) * 360"
                     [attr.cy]="(pt.yPercent / 100) * 144 + 6"
-                    r="2.8"
-                    fill="#2F7D4E"
-                    fill-opacity="0.82"
+                    r="3.2"
+                    [attr.fill]="pt.isLate ? 'var(--late-dot)' : 'var(--green-bar)'"
+                    fill-opacity="0.88"
                   >
                     <title>{{ pt.dateLabel }} · {{ pt.timeLabel }}</title>
                   </circle>
@@ -175,22 +234,24 @@ interface LogTableRow {
               </svg>
 
               <div class="scatter-chart__xaxis">
-                <span>Пн</span>
-                <span>Вт</span>
-                <span>Ср</span>
-                <span>Чт</span>
-                <span>Пт</span>
-                <span>Сб</span>
-                <span>Нд</span>
+                @for (item of weeklyData(); track item.isoDay) {
+                  <span [class.xaxis-unscheduled]="item.scheduled === 0">{{ item.day }}</span>
+                }
               </div>
             </div>
           </div>
 
           <div class="chart-card__foot">
-            <span class="legend-item">
-              <span class="legend-dot"></span>
-              Фактичний чекін
-            </span>
+            <div class="legend-group">
+              <span class="legend-item">
+                <span class="legend-dot"></span>
+                Вчасно
+              </span>
+              <span class="legend-item">
+                <span class="legend-dot legend-dot--late"></span>
+                Із запізненням
+              </span>
+            </div>
             <span class="legend-item">
               <span class="legend-dash"></span>
               Середній час
@@ -202,12 +263,11 @@ interface LogTableRow {
       <section class="logs-card card">
         <div class="logs-card__head">
           <h3>Журнал останніх відміток</h3>
-          <span class="mono logs-card__collection">habit_logs</span>
         </div>
 
         @if (visibleLogs().length === 0) {
           <div class="logs-empty">
-            <p>Ще немає жодної відмітки за останні 30 днів.</p>
+            <p>Дані для побудови графіків з’являться після перших відміток виконання.</p>
           </div>
         } @else {
           <div class="logs-table-wrap">
@@ -254,8 +314,8 @@ interface LogTableRow {
       </section>
 
       <footer class="stats-footer">
-        <span class="eyebrow">ДАНІ ЗА {{ habits().length }} ЗВИЧКАМИ</span>
-        <span class="eyebrow">ОСТАННЯ СИНХРОНІЗАЦІЯ · {{ syncTime }}</span>
+        <span class="eyebrow">{{ footerScopeLabel() }}</span>
+        <span class="eyebrow">ОСТАННЯ СИНХРОНІЗАЦІЯ · {{ syncTime() }}</span>
       </footer>
     </main>
   `,
@@ -266,8 +326,16 @@ export class StatisticsComponent {
   private readonly habitService = inject(HabitService);
   private readonly statsService = inject(StatisticsService);
 
+  readonly periods: readonly (7 | 14 | 30)[] = [7, 14, 30];
+  readonly selectedPeriod = signal<7 | 14 | 30>(30);
+  readonly selectedHabitId = signal<string>('all');
   readonly showAllLogs = signal(false);
-  readonly syncTime = this.formatCurrentTime();
+
+  readonly userTimeZone = computed(() => resolveTimeZone(this.auth.currentUser()?.timezone));
+  readonly syncTime = computed(() => {
+    const p = getZonedDateParts(new Date(), this.userTimeZone());
+    return `${String(p.hours).padStart(2, '0')}:${String(p.minutes).padStart(2, '0')}`;
+  });
 
   private readonly user$ = toObservable(this.auth.currentUser);
 
@@ -276,63 +344,101 @@ export class StatisticsComponent {
     { initialValue: [] as Habit[] }
   );
 
+  readonly filteredHabits = computed(() => {
+    const id = this.selectedHabitId();
+    const list = this.habits();
+    if (id === 'all') return list;
+    return list.filter((h) => h.idHabit === id);
+  });
+
+  readonly footerScopeLabel = computed(() => {
+    const id = this.selectedHabitId();
+    if (id === 'all') return `ДАНІ ЗА ${this.habits().length} ЗВИЧКАМИ`;
+    const found = this.habits().find((h) => h.idHabit === id);
+    return found ? `ЗВИЧКА · ${found.title.toUpperCase()}` : 'ОБРАНА ЗВИЧКА';
+  });
+
   readonly logs60d = toSignal(
-    this.user$.pipe(switchMap((u) => (u ? this.statsService.getLogsByUser(u.idUser, 60) : of([])))),
+    this.user$.pipe(
+      switchMap((u) => (u ? this.statsService.getLogsByUser(u.idUser, 65, u.timezone) : of([])))
+    ),
     { initialValue: [] as HabitLog[] }
   );
 
+  readonly scopedLogs60d = computed(() => {
+    const id = this.selectedHabitId();
+    const all = this.logs60d();
+    if (id !== 'all') {
+      return all.filter((l) => l.idHabit === id);
+    }
+    const activeIds = new Set(this.habits().map((h) => h.idHabit));
+    return all.filter((l) => activeIds.has(l.idHabit));
+  });
+
   readonly logs30d = computed(() => {
-    const cutoff = this.dateDaysAgo(29);
-    return this.logs60d().filter((l) => l.targetDate >= cutoff);
+    const days = this.selectedPeriod();
+    const tz = this.userTimeZone();
+    const cutoff = this.dateDaysAgo(days - 1, tz);
+    const todayIso = this.dateDaysAgo(0, tz);
+    return this.scopedLogs60d().filter((l) => l.targetDate >= cutoff && l.targetDate <= todayIso);
   });
 
   readonly prevLogs30d = computed(() => {
-    const cutoff = this.dateDaysAgo(29);
-    return this.logs60d().filter((l) => l.targetDate < cutoff);
+    const days = this.selectedPeriod();
+    const tz = this.userTimeZone();
+    const cutoffCurr = this.dateDaysAgo(days - 1, tz);
+    const cutoffPrev = this.dateDaysAgo(days * 2 - 1, tz);
+    return this.scopedLogs60d().filter(
+      (l) => l.targetDate >= cutoffPrev && l.targetDate < cutoffCurr
+    );
   });
 
   readonly totalCheckIns30d = computed(() => this.logs30d().length);
 
-  readonly totalScheduled30d = computed(() => {
-    const habits = this.habits();
-    if (habits.length === 0) return 0;
-    const today = new Date();
-    let total = 0;
-    for (let offset = 0; offset < 30; offset++) {
-      const d = new Date(today);
-      d.setDate(today.getDate() - offset);
-      const isoDay = d.getDay() === 0 ? 7 : d.getDay();
-      for (const h of habits) {
-        if (h.frequencyType === 'daily' || h.targetDays.includes(isoDay)) {
-          total++;
-        }
-      }
-    }
-    return total;
-  });
+  readonly totalScheduled30d = computed(() =>
+    this.statsService.countScheduledOccurrences(
+      this.filteredHabits(),
+      this.selectedPeriod(),
+      0,
+      this.userTimeZone()
+    )
+  );
+
+  readonly prevScheduled30d = computed(() =>
+    this.statsService.countScheduledOccurrences(
+      this.filteredHabits(),
+      this.selectedPeriod(),
+      this.selectedPeriod(),
+      this.userTimeZone()
+    )
+  );
 
   readonly overallConsistency = computed(() => {
-    const habits = this.habits();
-    if (habits.length === 0) return 0;
-    const logs = this.logs30d();
-    const sum = habits.reduce(
-      (acc, h) => acc + this.statsService.calculateCompletionRate(h, logs, 30),
-      0
-    );
-    return Math.round((sum / habits.length) * 100);
+    const scheduled = this.totalScheduled30d();
+    if (scheduled === 0) return 0;
+    return Math.min(100, Math.round((this.totalCheckIns30d() / scheduled) * 100));
   });
 
-  readonly consistencyDeltaLabel = computed(() => {
-    const scheduled = this.totalScheduled30d();
-    if (scheduled === 0) return '0,0%';
-    const prevPct = (this.prevLogs30d().length / scheduled) * 100;
-    const currPct = (this.logs30d().length / scheduled) * 100;
-    const diff = Math.max(0, currPct - prevPct);
-    return `${diff.toFixed(1).replace('.', ',')}%`;
+  readonly periodComparison = computed(() => {
+    const currScheduled = this.totalScheduled30d();
+    const prevScheduled = this.prevScheduled30d();
+    const prevLogs = this.prevLogs30d();
+    if (currScheduled === 0 || prevScheduled === 0 || prevLogs.length === 0) {
+      return { hasPrevious: false, isPositive: true, arrow: '↗', label: '0,0%' };
+    }
+    const prevPct = Math.min(100, (prevLogs.length / prevScheduled) * 100);
+    const currPct = Math.min(100, (this.logs30d().length / currScheduled) * 100);
+    const diff = currPct - prevPct;
+    return {
+      hasPrevious: true,
+      isPositive: diff >= 0,
+      arrow: diff >= 0 ? '↗' : '↘',
+      label: `${Math.abs(diff).toFixed(1).replace('.', ',')}%`,
+    };
   });
 
   readonly bestStreakInfo = computed(() => {
-    const habits = this.habits();
+    const habits = this.filteredHabits();
     if (habits.length === 0) {
       return { days: 0, habitTitle: 'Немає активних звичок' };
     }
@@ -343,25 +449,39 @@ export class StatisticsComponent {
     };
   });
 
-  readonly activeHabitsPadded = computed(() => String(this.habits().length).padStart(2, '0'));
+  readonly activeHabitsPadded = computed(() => String(this.filteredHabits().length).padStart(2, '0'));
 
   readonly weeklyData = computed<WeeklyChartItem[]>(() =>
-    this.statsService.buildWeeklyChartData(this.logs30d(), this.habits(), 30)
+    this.statsService.buildWeeklyChartData(
+      this.logs30d(),
+      this.filteredHabits(),
+      this.selectedPeriod(),
+      this.userTimeZone()
+    )
   );
 
+  readonly hasUnscheduledDays = computed(() =>
+    this.weeklyData().some((item) => item.scheduled === 0)
+  );
+
+  readonly shadedDayBands = computed(() => {
+    const colWidth = 360 / 7;
+    return this.weeklyData()
+      .filter((item) => item.scheduled === 0)
+      .map((item) => ({ x: (item.isoDay - 1) * colWidth, width: colWidth }));
+  });
+
   readonly weeklyAverageRate = computed(() => {
-    const data = this.weeklyData();
-    if (data.length === 0) return '0.0';
-    const avg = data.reduce((sum, item) => sum + item.rate, 0) / data.length;
+    const scheduledDays = this.weeklyData().filter((item) => item.scheduled > 0);
+    if (scheduledDays.length === 0) return '0.0';
+    const avg = scheduledDays.reduce((sum, item) => sum + item.rate, 0) / scheduledDays.length;
     return avg.toFixed(1);
   });
 
   readonly weeklyAverageRounded = computed(() => Math.round(Number(this.weeklyAverageRate())));
 
-  readonly weeklyDeltaLabel = computed(() => this.consistencyDeltaLabel());
-
   readonly scatterPoints = computed<CheckInScatterPoint[]>(() =>
-    this.statsService.buildCheckInScatterPoints(this.logs30d())
+    this.statsService.buildCheckInScatterPoints(this.logs30d(), this.userTimeZone())
   );
 
   readonly meanCheckInMinutes = computed(() => {
@@ -393,7 +513,12 @@ export class StatisticsComponent {
   });
 
   readonly sparklinePoints = computed(() =>
-    this.statsService.buildDailySparklinePoints(this.logs30d(), this.habits(), 14)
+    this.statsService.buildDailySparklinePoints(
+      this.logs30d(),
+      this.filteredHabits(),
+      this.selectedPeriod(),
+      this.userTimeZone()
+    )
   );
 
   readonly sparklineLinePath = computed(() => {
@@ -413,28 +538,32 @@ export class StatisticsComponent {
 
   readonly allLogRows = computed<LogTableRow[]>(() => {
     const habitMap = new Map(this.habits().map((h) => [h.idHabit, h.title]));
-    return this.logs30d()
-      .slice(0, 20)
-      .map((log) => {
-        const delay = Math.max(0, Math.round(log.delayMinutes));
-        const actualMin = this.statsService.extractActualMinutes(log);
-        const [y, m, d] = log.targetDate.split('-');
-        return {
-          idLog: log.idLog,
-          dateFormatted: `${d}.${m}.${y}`,
-          habitTitle: habitMap.get(log.idHabit) ?? 'Архівна звичка',
-          plannedTime: log.plannedTime,
-          actualTime: this.statsService.formatMinutesToTime(actualMin),
-          delayMinutes: delay,
-          isLate: delay > 30,
-          isSevereDelay: delay >= 60,
-        };
-      });
+    const tz = this.userTimeZone();
+    return this.logs30d().map((log) => {
+      const delay = Math.max(0, Math.round(log.delayMinutes));
+      const actualMin = this.statsService.extractActualMinutes(log, tz);
+      const [y, m, d] = log.targetDate.split('-');
+      return {
+        idLog: log.idLog,
+        dateFormatted: `${d}.${m}.${y}`,
+        habitTitle: habitMap.get(log.idHabit) ?? 'Архівна звичка',
+        plannedTime: log.plannedTime,
+        actualTime: this.statsService.formatMinutesToTime(actualMin),
+        delayMinutes: delay,
+        isLate: delay > 30,
+        isSevereDelay: delay >= 60,
+      };
+    });
   });
 
   readonly visibleLogs = computed(() =>
     this.showAllLogs() ? this.allLogRows() : this.allLogRows().slice(0, 5)
   );
+
+  onHabitFilterChange(habitId: string): void {
+    this.selectedHabitId.set(habitId);
+    this.showAllLogs.set(false);
+  }
 
   streakWord(days: number): string {
     const mod10 = days % 10;
@@ -444,17 +573,9 @@ export class StatisticsComponent {
     return 'днів';
   }
 
-  private dateDaysAgo(days: number): string {
-    const d = new Date();
+  private dateDaysAgo(days: number, timeZone?: string): string {
+    const d = getZonedTodayDate(timeZone);
     d.setDate(d.getDate() - days);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  }
-
-  private formatCurrentTime(): string {
-    const now = new Date();
-    return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    return formatIsoDate(d);
   }
 }

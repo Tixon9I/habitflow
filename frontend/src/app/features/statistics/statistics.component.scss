@@ -4,6 +4,27 @@
   gap: 1.25rem;
 }
 
+.stats-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.stats-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.stats-select {
+  height: 36px;
+  min-width: 240px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0 2.25rem 0 0.75rem;
+  border-radius: var(--radius-sm);
+}
+
 .kpi-card {
   padding: 1.5rem 1.75rem;
 }
@@ -61,6 +82,12 @@
   font-size: 0.75rem;
 }
 
+.trend-down {
+  color: var(--red);
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+
 .kpi-spark {
   display: flex;
   flex-direction: column;
@@ -103,6 +130,40 @@
     color: var(--ink-faint);
     white-space: nowrap;
   }
+
+.period-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+
+  &__btn {
+    border: none;
+    background: transparent;
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    padding: 0.2rem 0.5rem;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+
+    &:hover:not(.active) {
+      color: var(--ink);
+    }
+
+    &.active {
+      background: var(--surface);
+      color: var(--ink);
+      font-weight: 600;
+      box-shadow: var(--shadow-xs);
+    }
+  }
+}
 
   &__stat {
     display: flex;
@@ -196,12 +257,23 @@
   &__fill {
     width: 100%;
     min-height: 4px;
-    background: #2F7D4E;
+    background: var(--green-bar);
     border-radius: 4px 4px 0 0;
     transition: height 0.25s ease;
 
     &--muted {
-      background: #A3BEA9;
+      background: var(--green-soft);
+    }
+
+    &--unscheduled {
+      background: var(--unscheduled-bar);
+    }
+  }
+
+  &--unscheduled {
+    .bar-col__pct,
+    .bar-col__label {
+      color: var(--ink-faint);
     }
   }
 
@@ -252,6 +324,13 @@
   display: block;
 }
 
+.legend-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.875rem;
+  flex-wrap: wrap;
+}
+
 .legend-item {
   display: inline-flex;
   align-items: center;
@@ -262,14 +341,26 @@
   width: 8px;
   height: 8px;
   border-radius: 2px;
-  background: #2F7D4E;
+  background: var(--green-bar);
+
+  &--unscheduled {
+    background: var(--unscheduled-bar);
+  }
 }
 
 .legend-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #2F7D4E;
+  background: var(--green-bar);
+
+  &--late {
+    background: var(--late-dot);
+  }
+}
+
+.xaxis-unscheduled {
+  color: var(--ink-faint);
 }
 
 .legend-dash {

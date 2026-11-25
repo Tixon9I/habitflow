@@ -1,13 +1,13 @@
 import { Injectable, inject } from '@angular/core';
-import {
-  Firestore,
-  collection,
-  collectionData,
-  query,
-  where,
-} from '@angular/fire/firestore';
 import { Observable, map } from 'rxjs';
 import { Habit, HabitLog } from '../models/habit.model';
+import { HabitService } from './habit.service';
+import {
+  formatIsoDate,
+  getHabitCreatedDateStr,
+  getZonedDateParts,
+  getZonedTodayDate,
+} from '../utils/date-time.util';
 
 export interface WeeklyChartItem {
   isoDay: number;
@@ -24,18 +24,17 @@ export interface CheckInScatterPoint {
   minutesOfDay: number;
   timeLabel: string;
   dateLabel: string;
+  isLate: boolean;
 }
 
 @Injectable({ providedIn: 'root' })
 export class StatisticsService {
-  private readonly fs = inject(Firestore);
+  private readonly habitService = inject(HabitService);
 
-  getLogsByUser(userId: string, days: number): Observable<HabitLog[]> {
-    const ref = collection(this.fs, 'habit_logs');
-    const q = query(ref, where('idUser', '==', userId));
-    const cutoff = this.getCutoffDateString(days);
+  getLogsByUser(userId: string, days: number, timeZone?: string): Observable<HabitLog[]> {
+    const cutoff = this.getCutoffDateString(days, timeZone);
 
-    return (collectionData(q, { idField: 'idLog' }) as Observable<HabitLog[]>).pipe(
+    return this.habitService.getLogsByUser(userId).pipe(
       map((logs) =>
         logs
           .filter((log) => log.targetDate >= cutoff)
@@ -44,8 +43,14 @@ export class StatisticsService {
     );
   }
 
-  calculateCompletionRate(habit: Habit, logs: HabitLog[], days = 30): number {
-    const today = new Date();
+  calculateCompletionRate(
+    habit: Habit,
+    logs: HabitLog[],
+    days = 30,
+    timeZone?: string
+  ): number {
+    const today = getZonedTodayDate(timeZone);
+    const createdDateStr = getHabitCreatedDateStr(habit.createdAt, timeZone);
     const habitDates = new Set(
       logs.filter((l) => l.idHabit === habit.idHabit).map((l) => l.targetDate)
     );
@@ -56,11 +61,16 @@ export class StatisticsService {
     for (let offset = 0; offset < days; offset++) {
       const d = new Date(today);
       d.setDate(today.getDate() - offset);
+      const dateStr = this.formatDate(d);
+      if (createdDateStr !== null && dateStr < createdDateStr) {
+        continue;
+      }
+
       const isoDay = d.getDay() === 0 ? 7 : d.getDay();
       const isScheduled = habit.frequencyType === 'daily' || habit.targetDays.includes(isoDay);
       if (isScheduled) {
         scheduled++;
-        if (habitDates.has(this.formatDate(d))) {
+        if (habitDates.has(dateStr)) {
           completed++;
         }
       }
@@ -69,7 +79,44 @@ export class StatisticsService {
     return scheduled > 0 ? completed / scheduled : 0;
   }
 
-  buildWeeklyChartData(logs: HabitLog[], habits: Habit[] = [], days = 30): WeeklyChartItem[] {
+  countScheduledOccurrences(
+    habits: Habit[],
+    days: number,
+    startOffset = 0,
+    timeZone?: string
+  ): number {
+    if (habits.length === 0) return 0;
+    const today = getZonedTodayDate(timeZone);
+    const createdByHabit = new Map<string, string | null>(
+      habits.map((h) => [h.idHabit, getHabitCreatedDateStr(h.createdAt, timeZone)])
+    );
+
+    let total = 0;
+    for (let offset = startOffset; offset < startOffset + days; offset++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - offset);
+      const dateStr = this.formatDate(d);
+      const isoDay = d.getDay() === 0 ? 7 : d.getDay();
+
+      for (const h of habits) {
+        const createdStr = createdByHabit.get(h.idHabit) ?? null;
+        if (createdStr !== null && dateStr < createdStr) {
+          continue;
+        }
+        if (h.frequencyType === 'daily' || h.targetDays.includes(isoDay)) {
+          total++;
+        }
+      }
+    }
+    return total;
+  }
+
+  buildWeeklyChartData(
+    logs: HabitLog[],
+    habits: Habit[] = [],
+    days = 30,
+    timeZone?: string
+  ): WeeklyChartItem[] {
     const labels = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
     const completedByDay = new Array<number>(7).fill(0);
     const scheduledByDay = new Array<number>(7).fill(0);
@@ -80,14 +127,23 @@ export class StatisticsService {
       completedByDay[isoDay - 1]++;
     }
 
-    const today = new Date();
+    const today = getZonedTodayDate(timeZone);
+    const createdByHabit = new Map<string, string | null>(
+      habits.map((h) => [h.idHabit, getHabitCreatedDateStr(h.createdAt, timeZone)])
+    );
+
     for (let offset = 0; offset < days; offset++) {
       const d = new Date(today);
       d.setDate(today.getDate() - offset);
+      const dateStr = this.formatDate(d);
       const isoDay = d.getDay() === 0 ? 7 : d.getDay();
 
       if (habits.length > 0) {
         for (const h of habits) {
+          const createdStr = createdByHabit.get(h.idHabit) ?? null;
+          if (createdStr !== null && dateStr < createdStr) {
+            continue;
+          }
           if (h.frequencyType === 'daily' || h.targetDays.includes(isoDay)) {
             scheduledByDay[isoDay - 1]++;
           }
@@ -113,7 +169,7 @@ export class StatisticsService {
     });
   }
 
-  buildCheckInScatterPoints(logs: HabitLog[]): CheckInScatterPoint[] {
+  buildCheckInScatterPoints(logs: HabitLog[], timeZone?: string): CheckInScatterPoint[] {
     const minHour = 6 * 60;
     const maxHour = 23 * 60;
     const span = maxHour - minHour;
@@ -121,7 +177,7 @@ export class StatisticsService {
     return logs.map((log, index) => {
       const d = this.parseIsoDate(log.targetDate);
       const isoDay = d.getDay() === 0 ? 7 : d.getDay();
-      const minutesOfDay = this.extractActualMinutes(log);
+      const minutesOfDay = this.extractActualMinutes(log, timeZone);
       const clamped = Math.min(maxHour, Math.max(minHour, minutesOfDay));
 
       const jitter = (((index * 37) % 11) - 5) * 0.9;
@@ -135,12 +191,21 @@ export class StatisticsService {
         minutesOfDay,
         timeLabel: this.formatMinutesToTime(minutesOfDay),
         dateLabel: log.targetDate,
+        isLate: Math.max(0, log.delayMinutes) > 30,
       };
     });
   }
 
-  buildDailySparklinePoints(logs: HabitLog[], habits: Habit[], days = 14): number[] {
-    const today = new Date();
+  buildDailySparklinePoints(
+    logs: HabitLog[],
+    habits: Habit[],
+    days = 14,
+    timeZone?: string
+  ): number[] {
+    const today = getZonedTodayDate(timeZone);
+    const createdByHabit = new Map<string, string | null>(
+      habits.map((h) => [h.idHabit, getHabitCreatedDateStr(h.createdAt, timeZone)])
+    );
     const countsByDate = new Map<string, number>();
 
     for (const log of logs) {
@@ -154,9 +219,11 @@ export class StatisticsService {
       const isoDay = d.getDay() === 0 ? 7 : d.getDay();
       const dateStr = this.formatDate(d);
 
-      const scheduled = habits.filter(
-        (h) => h.frequencyType === 'daily' || h.targetDays.includes(isoDay)
-      ).length;
+      const scheduled = habits.filter((h) => {
+        const createdStr = createdByHabit.get(h.idHabit) ?? null;
+        if (createdStr !== null && dateStr < createdStr) return false;
+        return h.frequencyType === 'daily' || h.targetDays.includes(isoDay);
+      }).length;
       const completed = countsByDate.get(dateStr) ?? 0;
       const pct = scheduled > 0 ? Math.min(100, Math.round((completed / scheduled) * 100)) : 0;
       points.push(pct);
@@ -164,10 +231,10 @@ export class StatisticsService {
     return points;
   }
 
-  extractActualMinutes(log: HabitLog): number {
+  extractActualMinutes(log: HabitLog, timeZone?: string): number {
     if (log.completedAt && typeof log.completedAt.toDate === 'function') {
-      const dt = log.completedAt.toDate();
-      return dt.getHours() * 60 + dt.getMinutes();
+      const zoned = getZonedDateParts(log.completedAt.toDate(), timeZone);
+      return zoned.hours * 60 + zoned.minutes;
     }
     const [h, m] = log.plannedTime.split(':').map(Number);
     const total = h * 60 + m + Math.max(0, Math.round(log.delayMinutes));
@@ -181,17 +248,14 @@ export class StatisticsService {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
-  private getCutoffDateString(days: number): string {
-    const d = new Date();
+  private getCutoffDateString(days: number, timeZone?: string): string {
+    const d = getZonedTodayDate(timeZone);
     d.setDate(d.getDate() - Math.max(0, days - 1));
-    return this.formatDate(d);
+    return formatIsoDate(d);
   }
 
   private formatDate(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return formatIsoDate(date);
   }
 
   private parseIsoDate(iso: string): Date {
