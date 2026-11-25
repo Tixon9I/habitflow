@@ -35,16 +35,13 @@ class FeatureExtractor:
             except ValueError:
                 return None
 
-    def hasSufficientHistory(
+    def _compute_observed_days(
         self,
         habit: HabitInputDto,
         logs: list[HabitLogInputDto],
-        reference_date: date | None = None,
-    ) -> bool:
-        """Checks whether a habit has at least 14 days of observation history."""
-        ref_date = reference_date or date.today()
+        reference_date: date,
+    ) -> int:
         habit_logs = [log for log in logs if log.idHabit == habit.idHabit]
-
         earliest_date: date | None = self._parse_created_date(habit.createdAt)
         for log in habit_logs:
             log_date = date.fromisoformat(log.targetDate)
@@ -52,9 +49,18 @@ class FeatureExtractor:
                 earliest_date = log_date
 
         if earliest_date is None:
-            return False
+            return 0
 
-        observed_days = (ref_date - earliest_date).days + 1
+        return max(0, (reference_date - earliest_date).days + 1)
+
+    def hasSufficientHistory(
+        self,
+        habit: HabitInputDto,
+        logs: list[HabitLogInputDto],
+        reference_date: date | None = None,
+    ) -> bool:
+        ref_date = reference_date or date.today()
+        observed_days = self._compute_observed_days(habit, logs, ref_date)
         return observed_days >= self.cold_start_min_days
 
     @staticmethod
@@ -203,9 +209,9 @@ class FeatureExtractor:
         logs: list[HabitLogInputDto],
         reference_date: date | None = None,
     ) -> FeatureVectorDto:
-        """Builds FeatureVectorDto for a single habit over the 30-day window."""
         ref_date = reference_date or date.today()
         logs_df = self._build_logs_dataframe(habit.idHabit, logs)
+        observed_days = self._compute_observed_days(habit, logs, ref_date)
 
         miss_rate_7d = self.calcMissRate(habit, logs_df, window_days=7, reference_date=ref_date)
         miss_rate_14d = self.calcMissRate(habit, logs_df, window_days=14, reference_date=ref_date)
@@ -218,9 +224,11 @@ class FeatureExtractor:
         computed_streak = self._compute_current_streak(habit, logs_df, reference_date=ref_date)
 
         return FeatureVectorDto(
+            habitId=habit.idHabit,
             missRate7d=miss_rate_7d,
             missRate14d=miss_rate_14d,
             currentStreak=computed_streak,
             meanDelayMinutes=mean_delay,
             weekendMissRate=weekend_miss_rate,
+            historyDays=observed_days,
         )

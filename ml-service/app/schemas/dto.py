@@ -52,13 +52,13 @@ class HabitLogInputDto(BaseModel):
 
 
 class FeatureVectorDto(BaseModel):
-    """Five engineered behavioral features computed over a 30-day window."""
-
+    habitId: str = ""
     missRate7d: float = Field(..., ge=0.0, le=1.0)
     missRate14d: float = Field(..., ge=0.0, le=1.0)
     currentStreak: int = Field(..., ge=0)
     meanDelayMinutes: float
     weekendMissRate: float = Field(..., ge=0.0, le=1.0)
+    historyDays: int = Field(default=0, ge=0)
 
     def to_model_row(self) -> list[float]:
         return [

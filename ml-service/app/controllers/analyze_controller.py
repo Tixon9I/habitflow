@@ -11,8 +11,6 @@ from app.services.habit_risk_predictor_service import HabitRiskPredictorService
 
 
 class AnalyzeController:
-    """REST controller exposing POST /api/analyze and GET /health (diagram 3.10)."""
-
     def __init__(self, predictor_service: HabitRiskPredictorService | None = None) -> None:
         self.predictor_service = predictor_service or HabitRiskPredictorService()
         self.router = APIRouter()
@@ -21,7 +19,7 @@ class AnalyzeController:
     def _register_routes(self) -> None:
         self.router.add_api_route(
             "/health",
-            self.health,
+            self.getHealthCheck,
             methods=["GET"],
             response_model=HealthResponseDto,
             tags=["Health"],
@@ -29,14 +27,14 @@ class AnalyzeController:
         )
         self.router.add_api_route(
             "/api/analyze",
-            self.analyze,
+            self.postAnalyzeHabits,
             methods=["POST"],
             response_model=AnalyzeResponseDto,
             tags=["ML Analysis"],
             summary="Прогнозування ризику пропуску звичок та генерація рекомендацій",
         )
 
-    def health(self) -> HealthResponseDto:
+    def getHealthCheck(self) -> HealthResponseDto:
         return HealthResponseDto(
             status="ok",
             modelLoaded=self.predictor_service.risk_model.model is not None,
@@ -44,5 +42,8 @@ class AnalyzeController:
             modelMetrics=self.predictor_service.risk_model.metrics,
         )
 
-    def analyze(self, payload: AnalyzeRequestDto) -> AnalyzeResponseDto:
+    def postAnalyzeHabits(self, payload: AnalyzeRequestDto) -> AnalyzeResponseDto:
         return self.predictor_service.evaluateHabits(payload)
+
+    health = getHealthCheck
+    analyze = postAnalyzeHabits
