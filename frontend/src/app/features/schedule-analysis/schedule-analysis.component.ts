@@ -1,5 +1,4 @@
-import { Component, OnInit, inject, signal, computed } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { ChangeDetectionStrategy, Component, OnInit, inject, signal, computed } from '@angular/core';
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { of, switchMap } from 'rxjs';
 import { AuthService } from '../../core/services/auth.service';
@@ -7,6 +6,7 @@ import { HabitService } from '../../core/services/habit.service';
 import { StatisticsService } from '../../core/services/statistics.service';
 import { MlAnalysisService } from '../../core/services/ml-analysis.service';
 import { Habit, HabitLog, Recommendation, RiskLevel } from '../../core/models/habit.model';
+import { getZonedDateParts, resolveTimeZone } from '../../core/utils/date-time.util';
 
 interface RecommendationCardVm {
   rec: Recommendation;
@@ -31,7 +31,7 @@ interface FeatureWeightItem {
 @Component({
   selector: 'app-schedule-analysis',
   standalone: true,
-  imports: [CommonModule],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <main class="page analysis-page">
       <section class="analysis-header">
@@ -50,7 +50,7 @@ interface FeatureWeightItem {
               <span>Локальний сервер аналітики: підключено</span>
               <span class="mono server-host">127.0.0.1:8000</span>
             } @else {
-              <span>Локальний резервний режим (fallback)</span>
+              <span>Локальний резервний режим</span>
             }
           </div>
 
@@ -76,7 +76,7 @@ interface FeatureWeightItem {
           @if (analyzing()) {
             <div class="card analysis-empty">
               <div class="spinner"></div>
-              <p>Аналізуємо історію чекінів та обчислюємо ймовірність пропусків...</p>
+              <p>Аналізуємо історію відміток та обчислюємо ймовірність пропусків...</p>
             </div>
           } @else if (cards().length === 0) {
             <div class="card analysis-empty">
@@ -188,14 +188,14 @@ interface FeatureWeightItem {
           </div>
 
           <div class="model-card__foot mono">
-            Останнє навчання моделі · {{ modelDateLabel }}
+            Останнє навчання моделі · {{ modelDateLabel() }}
           </div>
         </aside>
       </section>
 
       <footer class="analysis-footer">
         <span class="eyebrow">МОДЕЛЬ ОНОВЛЕНО {{ lastUpdatedLabel() }}</span>
-        <span class="eyebrow">4 ОЗНАКИ · 30 ДІБ ДАНИХ</span>
+        <span class="eyebrow">5 ОЗНАК · 30 ДІБ ДАНИХ</span>
       </footer>
     </main>
   `,
@@ -207,15 +207,19 @@ export class ScheduleAnalysisComponent implements OnInit {
   private readonly statsService = inject(StatisticsService);
   private readonly mlService = inject(MlAnalysisService);
 
+  readonly userTimeZone = computed(() => resolveTimeZone(this.auth.currentUser()?.timezone));
   readonly health = this.mlService.healthStatus;
   readonly analyzing = signal(false);
   readonly busyRecId = signal<string | null>(null);
   readonly noticeMsg = signal('');
   readonly lastUpdatedLabel = signal('ЩОЙНО');
-  readonly modelDateLabel = this.formatTodayDotDate();
+  readonly modelDateLabel = computed(() => {
+    const p = getZonedDateParts(new Date(), this.userTimeZone());
+    return `${String(p.day).padStart(2, '0')}.${String(p.month).padStart(2, '0')}.${p.year}`;
+  });
 
   readonly featureWeights: FeatureWeightItem[] = [
-    { label: 'Середнє запізнення чекіну', weight: 0.42, widthPercent: 42 },
+    { label: 'Середнє запізнення відмітки', weight: 0.42, widthPercent: 42 },
     { label: 'Частка пропусків за 7 днів', weight: 0.31, widthPercent: 31 },
     { label: 'День тижня / вихідний', weight: 0.18, widthPercent: 18 },
     { label: 'Поточна серія', weight: 0.09, widthPercent: 9 },
@@ -243,7 +247,7 @@ export class ScheduleAnalysisComponent implements OnInit {
     const logs = this.logs30d();
 
     return this.recommendations()
-      .filter((r) => r.status === 'pending')
+      .filter((r) => r.status === 'pending' && habitMap.has(r.idHabit))
       .map((rec) => {
         const habit = habitMap.get(rec.idHabit) ?? null;
         const habitLogs = logs.filter((l) => l.idHabit === rec.idHabit);
@@ -256,6 +260,9 @@ export class ScheduleAnalysisComponent implements OnInit {
             : this.formatDaysRange(habit)
           : '—';
 
+        const isThreeDayPlan = rec.suggestedFrequency <= 3;
+        const recommendedDaysTitle = isThreeDayPlan ? 'Пн, Ср, Пт' : 'Пн–Пт';
+
         return {
           rec,
           habit,
@@ -265,10 +272,10 @@ export class ScheduleAnalysisComponent implements OnInit {
           currentPlanLabel,
           medianActualTime: medianTime,
           deviationLabel: deviation,
-          recommendedFreqLabel: `Пн–Пт (${rec.suggestedFrequency} дн./тиж.)`,
+          recommendedFreqLabel: `${recommendedDaysTitle} (${rec.suggestedFrequency} дн./тиж.)`,
           primaryButtonLabel: isLate
             ? `Змінити час на ${rec.suggestedTime}`
-            : 'Перейти на графік Пн–Пт',
+            : `Перейти на графік ${recommendedDaysTitle}`,
           secondaryButtonLabel: isLate && habit ? `Залишити ${habit.reminderTime}` : 'Відхилити',
         };
       });
@@ -288,9 +295,9 @@ export class ScheduleAnalysisComponent implements OnInit {
     try {
       const limit = user.notificationLimit || 3;
       const generated = await this.mlService.analyzeHabits(this.habits(), this.logs30d(), limit);
-      const now = new Date();
+      const p = getZonedDateParts(new Date(), this.userTimeZone());
       this.lastUpdatedLabel.set(
-        `О ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+        `О ${String(p.hours).padStart(2, '0')}:${String(p.minutes).padStart(2, '0')}`
       );
       if (generated.length === 0) {
         this.noticeMsg.set('Усі активні звички виконуються стабільно — корекція графіка не потрібна.');
@@ -353,14 +360,22 @@ export class ScheduleAnalysisComponent implements OnInit {
       return { medianTime: rec.suggestedTime, deviation: '' };
     }
 
-    const delays = logs.map((l) => Math.max(0, Math.round(l.delayMinutes))).sort((a, b) => a - b);
-    const mid = Math.floor(delays.length / 2);
-    const medianDelay =
-      delays.length % 2 === 0 ? Math.round((delays[mid - 1] + delays[mid]) / 2) : delays[mid];
+    const tz = this.userTimeZone();
+    const actualMinutesList = logs
+      .map((l) => this.statsService.extractActualMinutes(l, tz))
+      .sort((a, b) => a - b);
+    const midActual = Math.floor(actualMinutesList.length / 2);
+    const medianActualMinutes =
+      actualMinutesList.length % 2 === 0
+        ? Math.round((actualMinutesList[midActual - 1] + actualMinutesList[midActual]) / 2)
+        : actualMinutesList[midActual];
 
-    const [ph, pm] = habit.reminderTime.split(':').map(Number);
-    const actualMinutes = Math.min(23 * 60 + 59, ph * 60 + pm + medianDelay);
-    const medianTime = this.statsService.formatMinutesToTime(actualMinutes);
+    const delays = logs.map((l) => Math.max(0, Math.round(l.delayMinutes))).sort((a, b) => a - b);
+    const midDelay = Math.floor(delays.length / 2);
+    const medianDelay =
+      delays.length % 2 === 0 ? Math.round((delays[midDelay - 1] + delays[midDelay]) / 2) : delays[midDelay];
+
+    const medianTime = this.statsService.formatMinutesToTime(medianActualMinutes);
 
     if (medianDelay <= 0) {
       return { medianTime, deviation: '' };
@@ -381,12 +396,5 @@ export class ScheduleAnalysisComponent implements OnInit {
     const createdMs = habit.createdAt.toDate().getTime();
     const days = (Date.now() - createdMs) / (1000 * 60 * 60 * 24);
     return days < 14;
-  }
-
-  private formatTodayDotDate(): string {
-    const d = new Date();
-    const day = String(d.getDate()).padStart(2, '0');
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    return `${day}.${month}.${d.getFullYear()}`;
   }
 }

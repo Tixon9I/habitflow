@@ -1,11 +1,12 @@
-import { Component, inject, signal } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { RouterModule, Router, NavigationEnd } from '@angular/router';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { filter } from 'rxjs/operators';
 import { AuthService } from './core/services/auth.service';
 import { HabitService } from './core/services/habit.service';
 import { MlAnalysisService } from './core/services/ml-analysis.service';
 import { ConfirmDialogService } from './core/services/confirm-dialog.service';
+import { ThemeService } from './core/services/theme.service';
 import { ProfileModalComponent } from './features/profile-modal/profile-modal.component';
 import { HabitModalComponent } from './features/habit-modal/habit-modal.component';
 import { ConfirmModalComponent } from './shared/confirm-modal/confirm-modal.component';
@@ -13,8 +14,8 @@ import { ConfirmModalComponent } from './shared/confirm-modal/confirm-modal.comp
 @Component({
   selector: 'app-root',
   standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
-    CommonModule,
     RouterModule,
     ProfileModalComponent,
     HabitModalComponent,
@@ -68,6 +69,32 @@ import { ConfirmModalComponent } from './shared/confirm-modal/confirm-modal.comp
 
             <button
               type="button"
+              class="topnav__theme-btn"
+              (click)="themeService.toggle()"
+              [title]="themeService.theme() === 'dark' ? 'Світла тема' : 'Темна тема'"
+              aria-label="Перемкнути тему"
+            >
+              @if (themeService.theme() === 'dark') {
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="4"></circle>
+                  <path d="M12 2v2"></path>
+                  <path d="M12 20v2"></path>
+                  <path d="m4.93 4.93 1.41 1.41"></path>
+                  <path d="m17.66 17.66 1.41 1.41"></path>
+                  <path d="M2 12h2"></path>
+                  <path d="M20 12h2"></path>
+                  <path d="m6.34 17.66-1.41 1.41"></path>
+                  <path d="m19.07 4.93-1.41 1.41"></path>
+                </svg>
+              } @else {
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+                </svg>
+              }
+            </button>
+
+            <button
+              type="button"
               class="topnav__avatar"
               (click)="showProfileModal.set(true)"
               [disabled]="!auth.isLoggedIn()"
@@ -81,10 +108,19 @@ import { ConfirmModalComponent } from './shared/confirm-modal/confirm-modal.comp
       </header>
     }
 
+    @if (toastMessage()) {
+      <div class="app-toast" role="status" aria-live="polite">
+        {{ toastMessage() }}
+      </div>
+    }
+
     <router-outlet />
 
     @if (showProfileModal()) {
-      <app-profile-modal (close)="showProfileModal.set(false)" />
+      <app-profile-modal
+        (close)="showProfileModal.set(false)"
+        (saved)="onProfileSaved()"
+      />
     }
 
     @if (showHabitModal()) {
@@ -97,6 +133,7 @@ import { ConfirmModalComponent } from './shared/confirm-modal/confirm-modal.comp
 })
 export class AppComponent {
   readonly auth = inject(AuthService);
+  readonly themeService = inject(ThemeService);
   private readonly habitService = inject(HabitService);
   private readonly mlService = inject(MlAnalysisService);
   private readonly confirmDialog = inject(ConfirmDialogService);
@@ -106,18 +143,46 @@ export class AppComponent {
   readonly showProfileModal = signal(false);
   readonly showHabitModal = signal(false);
   readonly seeding = signal(false);
+  readonly toastMessage = signal('');
+  private toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-  readonly avatarInitial = () => {
+  readonly avatarInitial = computed(() => {
     const name = this.auth.currentUser()?.displayName ?? 'U';
     return name.charAt(0).toUpperCase();
-  };
+  });
 
   constructor() {
+    effect(() => {
+      if (!this.auth.currentUser()) {
+        this.habitService.clearCache();
+        this.mlService.clearCache();
+      }
+    });
+
     this.router.events
-      .pipe(filter((e) => e instanceof NavigationEnd))
-      .subscribe((e: NavigationEnd) => {
-        this.showNav.set(!e.url.startsWith('/auth'));
+      .pipe(
+        filter((e): e is NavigationEnd => e instanceof NavigationEnd),
+        takeUntilDestroyed()
+      )
+      .subscribe((e) => {
+        const activeUrl = e.urlAfterRedirects || e.url;
+        this.showNav.set(!activeUrl.startsWith('/auth'));
       });
+  }
+
+  onProfileSaved(): void {
+    this.showToast('Налаштування профілю успішно збережено.');
+  }
+
+  private showToast(message: string): void {
+    if (this.toastTimer) {
+      clearTimeout(this.toastTimer);
+    }
+    this.toastMessage.set(message);
+    this.toastTimer = setTimeout(() => {
+      this.toastMessage.set('');
+      this.toastTimer = null;
+    }, 3200);
   }
 
   async onSeedDemo(): Promise<void> {
@@ -126,8 +191,8 @@ export class AppComponent {
 
     const confirmed = await this.confirmDialog.open({
       eyebrow: 'ТЕСТОВІ ДАНІ',
-      title: 'Завантажити 30-денний демо-набір?',
-      message: 'Поточні тестові звички буде замінено на 5 звичок із 30-денною історією відміток, після чого автоматично запуститься аналіз ризиків.',
+      title: 'Завантажити демонстраційні дані?',
+      message: 'Поточні звички буде замінено на 7 різнопланових звичок (стабільна, із запізненнями, спадом у вихідні, зниженням регулярності, вибірковим графіком Пн/Ср/Пт, нова звичка холодного старту та архівна), після чого автоматично запуститься аналіз ризиків.',
       confirmLabel: 'Завантажити',
       cancelLabel: 'Скасувати',
     });

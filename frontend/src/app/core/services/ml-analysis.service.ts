@@ -13,7 +13,7 @@ import {
   where,
   Timestamp,
 } from '@angular/fire/firestore';
-import { Observable, map } from 'rxjs';
+import { Observable, map, shareReplay } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import {
   AnalyzeRequest,
@@ -28,6 +28,7 @@ import {
 } from '../models/habit.model';
 import { AuthService } from './auth.service';
 import { HabitService } from './habit.service';
+import { getZonedTodayDate } from '../utils/date-time.util';
 
 export interface MlHealthStatus {
   online: boolean;
@@ -35,11 +36,15 @@ export interface MlHealthStatus {
   lastInferenceMs: number | null;
 }
 
+const RECOMMENDATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const ANALYZE_TIMEOUT_MS = 3000;
+
 @Injectable({ providedIn: 'root' })
 export class MlAnalysisService {
   private readonly fs = inject(Firestore);
   private readonly auth = inject(AuthService);
   private readonly habitService = inject(HabitService);
+  private readonly recsCache = new Map<string, Observable<Recommendation[]>>();
 
   readonly healthStatus = signal<MlHealthStatus>({
     online: false,
@@ -47,7 +52,26 @@ export class MlAnalysisService {
     lastInferenceMs: null,
   });
 
+  clearCache(): void {
+    this.recsCache.clear();
+  }
+
+  private isRemoteHostWithLocalBackend(): boolean {
+    if (typeof window === 'undefined') return false;
+    const host = window.location.hostname;
+    const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+    const isLocalBackend =
+      environment.mlServiceUrl.includes('localhost') ||
+      environment.mlServiceUrl.includes('127.0.0.1');
+    return !isLocalHost && isLocalBackend;
+  }
+
   async checkHealth(): Promise<boolean> {
+    if (this.isRemoteHostWithLocalBackend()) {
+      this.healthStatus.update((prev) => ({ ...prev, online: false }));
+      return false;
+    }
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2500);
     try {
@@ -67,13 +91,27 @@ export class MlAnalysisService {
   }
 
   getRecommendations(userId: string): Observable<Recommendation[]> {
-    const ref = collection(this.fs, 'recommendations');
-    const q = query(ref, where('idUser', '==', userId));
-    return (collectionData(q, { idField: 'idRecommendation' }) as Observable<Recommendation[]>).pipe(
-      map((recs) =>
-        recs.sort((a, b) => b.riskScore - a.riskScore)
-      )
-    );
+    let stream = this.recsCache.get(userId);
+    if (!stream) {
+      const ref = collection(this.fs, 'recommendations');
+      const q = query(ref, where('idUser', '==', userId));
+      stream = (collectionData(q, { idField: 'idRecommendation' }) as Observable<Recommendation[]>).pipe(
+        map((recs) =>
+          recs
+            .filter((rec) => rec.status !== 'pending' || this.isRecommendationFresh(rec))
+            .sort((a, b) => b.riskScore - a.riskScore)
+        ),
+        shareReplay(1)
+      );
+      this.recsCache.set(userId, stream);
+    }
+    return stream;
+  }
+
+  isRecommendationFresh(rec: Recommendation): boolean {
+    const ts = rec.generatedAt?.toMillis?.();
+    if (typeof ts !== 'number') return true;
+    return ts >= Date.now() - RECOMMENDATION_TTL_MS;
   }
 
   async analyzeHabits(
@@ -87,13 +125,19 @@ export class MlAnalysisService {
       return [];
     }
 
-    const pausedHabitIds = await this.getPausedHabitIds(user.idUser);
-    const eligibleHabits = activeHabits.filter((h) => !pausedHabitIds.has(h.idHabit));
+    const [pausedHabitIds, adaptedHabitIds] = await Promise.all([
+      this.getPausedHabitIds(user.idUser),
+      this.getRecentlyAdaptedHabitIds(user.idUser),
+    ]);
+    const eligibleHabits = activeHabits.filter(
+      (h) => !pausedHabitIds.has(h.idHabit) && !adaptedHabitIds.has(h.idHabit)
+    );
     if (eligibleHabits.length === 0) {
+      await this.persistRecommendations(user.idUser, []);
       return [];
     }
 
-    const todayStr = this.habitService.formatDate(new Date());
+    const todayStr = this.habitService.formatDate(getZonedTodayDate(user.timezone));
     let results: Recommendation[] = [];
     let usedFallback = false;
 
@@ -106,43 +150,7 @@ export class MlAnalysisService {
       habitLogs: logs.map((l) => this.toHabitLogApiDto(l)),
     };
 
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5000);
-      try {
-        const response = await fetch(`${environment.mlServiceUrl}/api/analyze`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const data = (await response.json()) as AnalyzeResponse;
-        this.healthStatus.set({
-          online: true,
-          usedFallback: data.usedFallbackAdvice,
-          lastInferenceMs: data.inferenceTimeMs,
-        });
-
-        const apiRecs = data.recommendations.map((rec) => ({
-          ...rec,
-          generatedAt: Timestamp.now(),
-        }));
-
-        const coldStartSet = new Set(data.coldStartHabitIds);
-        const coldStartRecs = eligibleHabits
-          .filter((h) => coldStartSet.has(h.idHabit))
-          .map((h) => this.runLocalFallback(h, logs));
-
-        results = [...apiRecs, ...coldStartRecs];
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch {
+    if (this.isRemoteHostWithLocalBackend()) {
       usedFallback = true;
       this.healthStatus.set({
         online: false,
@@ -150,6 +158,52 @@ export class MlAnalysisService {
         lastInferenceMs: null,
       });
       results = eligibleHabits.map((h) => this.runLocalFallback(h, logs));
+    } else {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), ANALYZE_TIMEOUT_MS);
+        try {
+          const response = await fetch(`${environment.mlServiceUrl}/api/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const data = (await response.json()) as AnalyzeResponse;
+          this.healthStatus.set({
+            online: true,
+            usedFallback: data.usedFallbackAdvice,
+            lastInferenceMs: data.inferenceTimeMs,
+          });
+
+          const apiRecs = data.recommendations.map((rec) => ({
+            ...rec,
+            generatedAt: Timestamp.now(),
+          }));
+
+          const coldStartSet = new Set(data.coldStartHabitIds);
+          const coldStartRecs = eligibleHabits
+            .filter((h) => coldStartSet.has(h.idHabit))
+            .map((h) => this.runLocalFallback(h, logs));
+
+          results = [...apiRecs, ...coldStartRecs];
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch {
+        usedFallback = true;
+        this.healthStatus.set({
+          online: false,
+          usedFallback: true,
+          lastInferenceMs: null,
+        });
+        results = eligibleHabits.map((h) => this.runLocalFallback(h, logs));
+      }
     }
 
     const actionable = results
@@ -166,8 +220,14 @@ export class MlAnalysisService {
   }
 
   runLocalFallback(habit: Habit, logs: HabitLog[]): Recommendation {
-    const today = new Date();
-    const habitLogs = logs.filter((l) => l.idHabit === habit.idHabit);
+    const today = getZonedTodayDate(this.auth.currentUser()?.timezone);
+    const cutoffDate = new Date(today);
+    cutoffDate.setDate(today.getDate() - 29);
+    const cutoff30d = this.habitService.formatDate(cutoffDate);
+
+    const habitLogs = logs.filter(
+      (l) => l.idHabit === habit.idHabit && l.targetDate >= cutoff30d
+    );
     const completedDates = new Set(habitLogs.map((l) => l.targetDate));
 
     const missRate7d = this.calcMissRate(habit, completedDates, today, 7);
@@ -179,15 +239,33 @@ export class MlAnalysisService {
       delays.length > 0 ? delays.reduce((sum, v) => sum + v, 0) / delays.length : 0;
     const medianDelay = this.calcMedian(delays);
 
-    const riskScore = Number(
-      Math.min(
-        1.0,
-        0.42 * (Math.min(meanDelay, 90) / 90) +
-          0.31 * missRate7d +
-          0.18 * weekendMissRate +
-          0.09 * (1 - Math.min(habit.currentStreak, 14) / 14)
-      ).toFixed(4)
-    );
+    const baseScore =
+      0.42 * (Math.min(meanDelay, 90) / 90) +
+      0.31 * missRate7d +
+      0.18 * weekendMissRate +
+      0.09 * (1 - Math.min(habit.currentStreak, 14) / 14);
+
+    let patternScore = 0;
+    if (meanDelay >= 30 && medianDelay > 15) {
+      patternScore = Math.max(
+        patternScore,
+        0.44 + 0.3 * (Math.min(meanDelay, 120) / 120) + 0.2 * missRate7d
+      );
+    }
+    if (weekendMissRate - missRate14d >= 0.25 && weekendMissRate >= 0.5) {
+      patternScore = Math.max(
+        patternScore,
+        0.45 + 0.3 * weekendMissRate + 0.15 * missRate14d
+      );
+    }
+    if (missRate7d >= 0.5 && missRate14d >= 0.4) {
+      patternScore = Math.max(
+        patternScore,
+        0.38 + 0.35 * missRate7d + 0.2 * missRate14d
+      );
+    }
+
+    const riskScore = Number(Math.min(1.0, Math.max(baseScore, patternScore)).toFixed(4));
 
     const riskLevel = this.classifyRiskLevel(riskScore);
     const mainFactor = this.identifyMainFactor(meanDelay, weekendMissRate, missRate14d);
@@ -197,10 +275,13 @@ export class MlAnalysisService {
         ? this.shiftTimeByMinutes(habit.reminderTime, 15 * Math.round(medianDelay / 15))
         : habit.reminderTime;
 
+    const currentDaysCount = habit.frequencyType === 'daily' ? 7 : habit.targetDays.length;
     const suggestedFrequency =
       mainFactor === 'weekend_drop' || mainFactor === 'low_regularity'
-        ? 5
-        : habit.targetDays.length;
+        ? currentDaysCount > 5
+          ? 5
+          : Math.max(2, currentDaysCount - 2)
+        : currentDaysCount;
 
     const explanationText = this.buildFallbackExplanation(
       habit,
@@ -227,6 +308,11 @@ export class MlAnalysisService {
   }
 
   async applyRecommendation(rec: Recommendation, habit?: Habit): Promise<void> {
+    await updateDoc(doc(this.fs, 'recommendations', rec.idRecommendation), {
+      status: 'accepted',
+      generatedAt: Timestamp.now(),
+    });
+
     let targetHabit = habit;
     if (!targetHabit) {
       const snap = await getDoc(doc(this.fs, 'habits', rec.idHabit));
@@ -238,17 +324,17 @@ export class MlAnalysisService {
     if (targetHabit) {
       const nextTime =
         rec.mainFactor === 'late_checkin' ? rec.suggestedTime : targetHabit.reminderTime;
+      const currentDaysCount =
+        targetHabit.frequencyType === 'daily' ? 7 : targetHabit.targetDays.length;
       const nextDays =
         rec.mainFactor === 'weekend_drop' || rec.mainFactor === 'low_regularity'
-          ? [1, 2, 3, 4, 5]
+          ? rec.suggestedFrequency <= 3 || currentDaysCount <= 5
+            ? [1, 3, 5]
+            : [1, 2, 3, 4, 5]
           : targetHabit.targetDays;
 
-      await this.habitService.updateHabitSchedule(targetHabit, nextTime, nextDays);
+      await this.habitService.updateHabitSchedule(targetHabit, nextTime, nextDays, false);
     }
-
-    await updateDoc(doc(this.fs, 'recommendations', rec.idRecommendation), {
-      status: 'accepted',
-    });
   }
 
   async dismissRecommendation(recId: string): Promise<boolean> {
@@ -260,6 +346,24 @@ export class MlAnalysisService {
     const rec = snap.data() as Recommendation;
     const paused = await this.getPausedHabitIds(rec.idUser);
     return paused.has(rec.idHabit);
+  }
+
+  private async getRecentlyAdaptedHabitIds(userId: string): Promise<Set<string>> {
+    const ref = collection(this.fs, 'recommendations');
+    const q = query(ref, where('idUser', '==', userId), where('status', '==', 'accepted'));
+    const snap = await getDocs(q);
+
+    const sevenDaysAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const adapted = new Set<string>();
+
+    for (const d of snap.docs) {
+      const rec = d.data() as Recommendation;
+      const ts = rec.generatedAt?.toMillis?.() ?? 0;
+      if (ts >= sevenDaysAgoMs) {
+        adapted.add(rec.idHabit);
+      }
+    }
+    return adapted;
   }
 
   private async getPausedHabitIds(userId: string): Promise<Set<string>> {
@@ -411,7 +515,7 @@ export class MlAnalysisService {
   ): string {
     const riskPct = Math.round(riskScore * 100);
     if (mainFactor === 'late_checkin') {
-      return `Для звички «${habit.title}» зафіксовано систематичні запізнення чекінів (ризик пропуску ${riskPct}%). Перенесення нагадування з ${habit.reminderTime} на ${suggestedTime} краще відповідатиме фактичному вікну активності.`;
+      return `Для звички «${habit.title}» зафіксовано систематичні запізнення відміток (ризик пропуску ${riskPct}%). Перенесення нагадування з ${habit.reminderTime} на ${suggestedTime} краще відповідатиме фактичному вікну активності.`;
     }
     if (mainFactor === 'weekend_drop') {
       const weekendPct = Math.round(weekendMissRate * 100);
