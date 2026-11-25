@@ -7,7 +7,7 @@ from datetime import date, timedelta
 import pytest
 
 from app.models.risk_classifier_model import RiskClassifierModel
-from app.schemas.dto import AnalyzeRequestDto, HabitInputDto, HabitLogInputDto
+from app.schemas.dto import AnalyzeRequestDto, FrequencyType, HabitInputDto, HabitLogInputDto
 from app.services.ai_explanation_service import AiExplanationService
 from app.services.feature_extractor import FeatureExtractor
 from app.services.habit_risk_predictor_service import HabitRiskPredictorService
@@ -19,7 +19,7 @@ def _make_habit(
     habit_id: str = "habit_01",
     title: str = "Ранкова зарядка",
     reminder_time: str = "07:30",
-    frequency_type: str = "daily",
+    frequency_type: FrequencyType = "daily",
     target_days: list[int] | None = None,
 ) -> HabitInputDto:
     created_at = (REF_DATE - timedelta(days=29)).isoformat() + "T07:00:00Z"
@@ -28,7 +28,7 @@ def _make_habit(
         idUser="user_01",
         title=title,
         category="Здоров'я",
-        frequencyType=frequency_type,  # type: ignore[arg-type]
+        frequencyType=frequency_type,
         targetDays=target_days or [1, 2, 3, 4, 5, 6, 7],
         reminderTime=reminder_time,
         scheduleHistory=[],
@@ -244,13 +244,13 @@ def test_mr5_2_llm_failure_and_timeout_fallback(
     )
 
     slow_ai = AiExplanationService(api_key="", timeout_seconds=0.2)
-    slow_ai._client = object()  # type: ignore[assignment]
+    slow_ai._client = True
 
     def _slow_call(_prompt: str) -> str:
         time.sleep(0.6)
         return "Too late"
 
-    slow_ai._call_gemini = _slow_call  # type: ignore[method-assign]
+    slow_ai._call_gemini = _slow_call
 
     timeout_predictor = HabitRiskPredictorService(
         feature_extractor=predictor.feature_extractor,

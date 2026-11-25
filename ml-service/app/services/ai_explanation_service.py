@@ -8,8 +8,8 @@ from app.schemas.dto import FeatureVectorDto, HabitInputDto, MainFactor, RiskLev
 
 try:
     from google import genai
-except ImportError:  # pragma: no cover - optional when running offline
-    genai = None  # type: ignore[assignment]
+except ImportError:
+    genai = None
 
 
 class AiExplanationService:
@@ -128,7 +128,6 @@ class AiExplanationService:
         suggested_time: str,
         suggested_frequency: int,
     ) -> str:
-        """Deterministic Ukrainian template fallback when Gemini API is disabled or unavailable."""
         risk_pct = round(risk_score * 100)
         freq_label = f"{suggested_frequency} дн./тиж."
 

@@ -16,8 +16,6 @@ from app.services.feature_extractor import FeatureExtractor
 
 
 class HabitRiskPredictorService:
-    """Orchestrates feature extraction, ML scoring, and advice generation (diagram 3.10)."""
-
     def __init__(
         self,
         feature_extractor: FeatureExtractor | None = None,
@@ -32,7 +30,6 @@ class HabitRiskPredictorService:
         self.explanation_service = explanation_service or AiExplanationService()
 
     def evaluateHabits(self, request: AnalyzeRequestDto) -> AnalyzeResponseDto:
-        """Evaluates active user habits and returns adaptive schedule recommendations."""
         started_at = time.perf_counter()
 
         recommendations: list[RecommendationDto] = []

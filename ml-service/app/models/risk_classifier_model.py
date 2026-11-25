@@ -29,8 +29,6 @@ FEATURE_NAMES = [
 
 
 class RiskClassifierModel:
-    """RandomForestClassifier wrapper for habit skip-risk prediction (diagram 3.10)."""
-
     def __init__(self, artifact_path: Path | None = None) -> None:
         self.artifact_path = artifact_path or settings.model_artifact_path
         self.model: RandomForestClassifier | None = None
@@ -42,7 +40,6 @@ class RiskClassifierModel:
         n_samples: int = 2400,
         random_state: int = 42,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Generates calibrated synthetic behavioral dataset aligned with ITMAS-2026 weights."""
         rng = np.random.default_rng(random_state)
 
         base_miss = rng.beta(1.6, 2.2, size=n_samples)
@@ -91,7 +88,6 @@ class RiskClassifierModel:
         return features, labels
 
     def loadOrTrainDefaultModel(self) -> RandomForestClassifier:
-        """Loads persisted RandomForest model or trains and caches the default model."""
         if self.artifact_path.exists():
             try:
                 bundle = joblib.load(self.artifact_path)
@@ -149,7 +145,6 @@ class RiskClassifierModel:
         return self.model
 
     def predictRiskScore(self, features: FeatureVectorDto) -> float:
-        """Predicts probability of missing the habit (0.0 .. 1.0)."""
         if self.model is None:
             self.loadOrTrainDefaultModel()
         assert self.model is not None

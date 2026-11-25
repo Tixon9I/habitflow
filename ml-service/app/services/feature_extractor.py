@@ -8,8 +8,6 @@ from app.schemas.dto import FeatureVectorDto, HabitInputDto, HabitLogInputDto
 
 
 class FeatureExtractor:
-    """Extracts 5 behavioral features over a 30-day rolling window (diagram 3.10)."""
-
     def __init__(self, window_days: int = 30, cold_start_min_days: int = 14) -> None:
         self.window_days = window_days
         self.cold_start_min_days = cold_start_min_days
@@ -95,7 +93,6 @@ class FeatureExtractor:
         window_days: int,
         reference_date: date,
     ) -> float:
-        """Calculates the proportion of missed scheduled days in the given window."""
         scheduled_weekdays = self._scheduled_weekdays(habit)
         start_date = reference_date - timedelta(days=window_days - 1)
 
@@ -127,7 +124,6 @@ class FeatureExtractor:
         reference_date: date,
         window_days: int | None = None,
     ) -> float:
-        """Calculates mean check-in delay in minutes over the analysis window."""
         effective_window = window_days or self.window_days
         if logs_df.empty:
             return 0.0
@@ -150,7 +146,6 @@ class FeatureExtractor:
         reference_date: date,
         window_days: int | None = None,
     ) -> float:
-        """Calculates the miss rate specifically on Saturday (6) and Sunday (7)."""
         effective_window = window_days or self.window_days
         scheduled_weekdays = self._scheduled_weekdays(habit).intersection({6, 7})
         if not scheduled_weekdays:
@@ -185,7 +180,6 @@ class FeatureExtractor:
         logs_df: pd.DataFrame,
         reference_date: date,
     ) -> int:
-        """Computes active streak from logs up to reference_date."""
         if logs_df.empty:
             return 0
 

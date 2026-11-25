@@ -13,8 +13,6 @@ RecommendationStatus = Literal["pending", "accepted", "dismissed"]
 
 
 class HabitInputDto(BaseModel):
-    """Exact Firestore `habits` document contract."""
-
     model_config = ConfigDict(extra="ignore")
 
     idHabit: str = Field(..., min_length=1)
@@ -38,8 +36,6 @@ class HabitInputDto(BaseModel):
 
 
 class HabitLogInputDto(BaseModel):
-    """Exact Firestore `habit_logs` document contract."""
-
     model_config = ConfigDict(extra="ignore")
 
     idLog: str = Field(..., min_length=1)
@@ -71,8 +67,6 @@ class FeatureVectorDto(BaseModel):
 
 
 class RecommendationDto(BaseModel):
-    """Exact Firestore `recommendations` document contract."""
-
     idRecommendation: str
     idHabit: str
     idUser: str
@@ -87,8 +81,6 @@ class RecommendationDto(BaseModel):
 
 
 class AnalyzeRequestDto(BaseModel):
-    """Payload sent from Angular MlAnalysisService to POST /api/analyze."""
-
     idUser: str = Field(..., min_length=1)
     aiConsent: bool = Field(default=True)
     notificationLimit: int = Field(default=3, ge=1, le=20)
@@ -98,8 +90,6 @@ class AnalyzeRequestDto(BaseModel):
 
 
 class AnalyzeResponseDto(BaseModel):
-    """Response returned by POST /api/analyze."""
-
     recommendations: list[RecommendationDto]
     coldStartHabitIds: list[str] = Field(default_factory=list)
     inferenceTimeMs: float = Field(..., ge=0.0)
@@ -107,8 +97,6 @@ class AnalyzeResponseDto(BaseModel):
 
 
 class HealthResponseDto(BaseModel):
-    """Response returned by GET /health."""
-
     status: Literal["ok"] = "ok"
     modelLoaded: bool
     geminiConfigured: bool
