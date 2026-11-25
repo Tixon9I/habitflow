@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from app.config import settings
@@ -87,9 +88,53 @@ class HabitRiskPredictorService:
             )
 
         scored_items.sort(key=lambda item: item[2], reverse=True)
-        llm_calls_made = 0
+        llm_indices: list[int] = []
 
-        for (
+        for idx, (
+            habit,
+            features,
+            risk_score,
+            _risk_level,
+            _main_factor,
+            suggested_time,
+            _suggested_frequency,
+        ) in enumerate(scored_items):
+            if len(llm_indices) < request.notificationLimit and (
+                risk_score >= 0.40
+                or suggested_time != habit.reminderTime
+                or features.missRate7d >= 0.25
+            ):
+                llm_indices.append(idx)
+
+        llm_results: dict[int, tuple[str, bool]] = {}
+        if llm_indices:
+            def _resolve_one(target_idx: int) -> tuple[int, str, bool]:
+                (
+                    h_item,
+                    f_item,
+                    r_score,
+                    r_level,
+                    m_factor,
+                    s_time,
+                    s_freq,
+                ) = scored_items[target_idx]
+                text, fb = self.explanation_service.generateAdviceWithMeta(
+                    habit=h_item,
+                    features=f_item,
+                    risk_score=r_score,
+                    risk_level=r_level,
+                    main_factor=m_factor,
+                    suggested_time=s_time,
+                    suggested_frequency=s_freq,
+                    ai_consent=request.aiConsent,
+                )
+                return target_idx, text, fb
+
+            with ThreadPoolExecutor(max_workers=min(4, len(llm_indices))) as pool:
+                for res_idx, text, fb in pool.map(_resolve_one, llm_indices):
+                    llm_results[res_idx] = (text, fb)
+
+        for idx, (
             habit,
             features,
             risk_score,
@@ -97,28 +142,9 @@ class HabitRiskPredictorService:
             main_factor,
             suggested_time,
             suggested_frequency,
-        ) in scored_items:
-            needs_personalized_advice = (
-                llm_calls_made < request.notificationLimit
-                and (
-                    risk_score >= 0.40
-                    or suggested_time != habit.reminderTime
-                    or features.missRate7d >= 0.25
-                )
-            )
-
-            if needs_personalized_advice:
-                llm_calls_made += 1
-                explanation_text, used_fb = self.explanation_service.generateAdviceWithMeta(
-                    habit=habit,
-                    features=features,
-                    risk_score=risk_score,
-                    risk_level=risk_level,
-                    main_factor=main_factor,
-                    suggested_time=suggested_time,
-                    suggested_frequency=suggested_frequency,
-                    ai_consent=request.aiConsent,
-                )
+        ) in enumerate(scored_items):
+            if idx in llm_results:
+                explanation_text, used_fb = llm_results[idx]
                 if used_fb:
                     used_fallback_any = True
             else:

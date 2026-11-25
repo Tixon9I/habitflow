@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from app.config import settings
@@ -30,9 +29,8 @@ class AiExplanationService:
             else None
         )
         self._executor = ThreadPoolExecutor(
-            max_workers=2,
+            max_workers=4,
             thread_name_prefix="gemini",
-            initializer=lambda: setattr(threading.current_thread(), "daemon", True),
         )
 
     @property
@@ -75,8 +73,8 @@ class AiExplanationService:
             return fallback_text, True
 
         prompt = (
-            "Ти помічник вебзастосунку HabitFlow. Напиши коротку, доброзичливу й практичну "
-            "пораду українською мовою (до 2 речень, без списків і без зайвих вступів) для користувача.\n"
+            "Ти аналітичний помічник вебзастосунку HabitFlow. Напиши коротку, доброзичливу й практичну "
+            "пораду українською мовою (до 2 речень, звертайся на «ви» нейтрально без припущень про стать чи побутові причини, спирайся лише на наведені показники).\n"
             f"Звичка: {habit.title}\n"
             f"Поточний час нагадування: {habit.reminderTime}\n"
             f"Ймовірність пропуску: {round(risk_score * 100)}% ({risk_level})\n"
@@ -84,7 +82,7 @@ class AiExplanationService:
             f"Середня затримка виконання: {round(features.meanDelayMinutes)} хв\n"
             f"Пропуски за 7 днів: {round(features.missRate7d * 100)}%\n"
             f"Пропуски у вихідні: {round(features.weekendMissRate * 100)}%\n"
-            f"Рекомендований час: {suggested_time}, рекомендована частота: {suggested_frequency}."
+            f"Рекомендований час: {suggested_time}, рекомендована частота: {suggested_frequency} дн./тиж."
         )
 
         future = self._executor.submit(self._call_gemini, prompt)
